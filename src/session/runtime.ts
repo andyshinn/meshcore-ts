@@ -1,3 +1,4 @@
+import type { DeviceAdminRuntime } from '../features/deviceAdmin';
 import type { MeshObservations } from '../meshObservations';
 import type { PendingChannelSends } from '../pendingChannelSends';
 
@@ -7,4 +8,5 @@ import type { PendingChannelSends } from '../pendingChannelSends';
 export interface SessionRuntime {
   meshObs: MeshObservations;
   pendingChannelSends: PendingChannelSends;
+  deviceAdmin: DeviceAdminRuntime;
 }
