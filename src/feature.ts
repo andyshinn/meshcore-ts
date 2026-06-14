@@ -4,6 +4,7 @@ import type { Logger } from './ports/logger';
 import type { AdminSessionStore } from './session/adminSessions';
 import type { SessionRuntime } from './session/runtime';
 import type { SessionState } from './state/model';
+import type { TransportState } from './types';
 
 /** The controlled slice of a session a feature module may touch. Every shared
  *  capability is injected here per-session — the transport-facing helpers, the
@@ -33,6 +34,8 @@ export interface FeatureContext {
   readonly admin: AdminSessionStore;
   /** Per-session mutable feature state (replaces module-level let/const). */
   readonly rt: SessionRuntime;
+  /** Current transport connection state (replaces transportManager.getState()). */
+  getTransportState(): TransportState;
 }
 
 /** A protocol feature: owns the inbound wire codes it reacts to. Feature
