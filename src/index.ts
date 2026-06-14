@@ -19,6 +19,7 @@ export * from './features/contactsFull';
 export * from './features/customVars';
 export * from './features/deviceAdmin';
 export * from './features/deviceInfo';
+export * from './features/directMessages';
 export * from './features/drain';
 export * from './features/floodScope';
 export * from './features/misc';
