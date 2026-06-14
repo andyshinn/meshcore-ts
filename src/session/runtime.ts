@@ -4,11 +4,11 @@ import type { DeviceAdminRuntime } from '../features/deviceAdmin';
 import type { DmRuntime } from '../features/directMessages';
 import type { DrainRuntime } from '../features/drain';
 import type { PathDiagRuntime } from '../features/pathDiagnostics';
+import type { AdminCorrRuntime } from '../features/repeaterAdmin';
 import type { MeshObservations } from '../meshObservations';
 import type { PendingChannelSends } from '../pendingChannelSends';
 
-/** Per-session mutable state, replacing every former module-level global.
- *  Later feature tasks add fields (adminCorr). */
+/** Per-session mutable state, replacing every former module-level global. */
 export interface SessionRuntime {
   meshObs: MeshObservations;
   pendingChannelSends: PendingChannelSends;
@@ -18,4 +18,5 @@ export interface SessionRuntime {
   contactsIter: ContactsIterRuntime;
   pathDisc: PathDiagRuntime;
   dm: DmRuntime;
+  adminCorr: AdminCorrRuntime;
 }

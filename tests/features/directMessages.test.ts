@@ -19,6 +19,7 @@ import {
 } from '../../src/features/directMessages';
 import { createDrainRuntime } from '../../src/features/drain';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
+import { createAdminCorrRuntime } from '../../src/features/repeaterAdmin';
 import { MeshObservations } from '../../src/meshObservations';
 import { PendingChannelSends } from '../../src/pendingChannelSends';
 import { MeshCoreEvents } from '../../src/ports/events';
@@ -151,6 +152,7 @@ function makeCtx(): {
       contactsIter: createContactsIterRuntime(),
       pathDisc: createPathDiagRuntime(),
       dm: createDmRuntime(),
+      adminCorr: createAdminCorrRuntime(),
     },
     getTransportState: () => 'connected',
     contactsSync: () => {},

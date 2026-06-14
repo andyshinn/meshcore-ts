@@ -27,6 +27,7 @@ export * from './features/pathDiagnostics';
 export * from './features/pathHash';
 export * from './features/radioParams';
 export * from './features/rawData';
+export * from './features/repeaterAdmin';
 export * from './features/selfInfo';
 export * from './features/signing';
 export * from './features/time';
