@@ -7,4 +7,5 @@ export * from './codes';
 export * from './encode';
 export * from './errors';
 export * from './meshPacket';
+export * from './repeater';
 export * from './types';
