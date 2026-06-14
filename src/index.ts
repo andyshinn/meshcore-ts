@@ -44,6 +44,7 @@ export * from './registry';
 export * from './repeater';
 export * from './session/adminSessions';
 export * from './session/runtime';
+export * from './session/session';
 export * from './state/discoveredStore';
 export * from './state/model';
 export * from './types';
