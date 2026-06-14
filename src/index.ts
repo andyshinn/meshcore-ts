@@ -9,5 +9,8 @@ export * from './encode';
 export * from './errors';
 export * from './frame';
 export * from './meshPacket';
+export * from './ports/events';
+export * from './ports/logger';
+export * from './ports/transport';
 export * from './repeater';
 export * from './types';
