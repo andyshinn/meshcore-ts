@@ -13,4 +13,6 @@ export * from './ports/events';
 export * from './ports/logger';
 export * from './ports/transport';
 export * from './repeater';
+export * from './state/discoveredStore';
+export * from './state/model';
 export * from './types';
