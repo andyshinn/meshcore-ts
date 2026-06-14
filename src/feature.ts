@@ -6,6 +6,16 @@ import type { SessionRuntime } from './session/runtime';
 import type { SessionState } from './state/model';
 import type { TransportState } from './types';
 
+/** Contact-sync coordination signal emitted by the contacts feature while a
+ *  GET_CONTACTS iteration streams in. The session forwards it to the
+ *  handshake's progress + start/done waiters (see onContactsSync). This is an
+ *  INTERNAL signal delivered via the {@link FeatureContext.contactsSync}
+ *  callback — it is NOT a public event on {@link MeshCoreEvents}. */
+export type ContactsSyncSignal =
+  | { phase: 'start'; total: number | null }
+  | { phase: 'progress'; done: number; total: number }
+  | { phase: 'done'; done: number };
+
 /** The controlled slice of a session a feature module may touch. Every shared
  *  capability is injected here per-session — the transport-facing helpers, the
  *  ports (events, log, admin) and model (state), plus the per-session mutable
@@ -36,6 +46,10 @@ export interface FeatureContext {
   readonly rt: SessionRuntime;
   /** Current transport connection state (replaces transportManager.getState()). */
   getTransportState(): TransportState;
+  /** INTERNAL contact-sync signal sink (was the module-level
+   *  `emit.contactsSync`). The session implements this to drive the handshake's
+   *  syncProgress + start/done waiters; it is NOT a public event. */
+  contactsSync(signal: ContactsSyncSignal): void;
 }
 
 /** A protocol feature: owns the inbound wire codes it reacts to. Feature
