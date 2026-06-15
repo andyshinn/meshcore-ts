@@ -214,7 +214,7 @@ describe('repeaterAdmin: CLI command + onCliReply correlation', () => {
   it('onSentTag consumes the RESP_SENT tag ahead of the DM FIFO', () => {
     const { ctx } = makeCtx();
     registerAdminHooks(ctx);
-    // Park an admin-sent awaiter (as writeAdminAndAwaitTag would).
+    // Park an admin-sent awaiter (as sendBinaryReq does before its write).
     let resolvedTag: string | null = null;
     ctx.rt.adminCorr.adminSentQueue.push({
       resolve: (t) => {
