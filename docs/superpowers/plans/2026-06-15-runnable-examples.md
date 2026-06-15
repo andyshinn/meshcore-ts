@@ -797,7 +797,7 @@ git commit -m "docs(examples): repeater status/telemetry/neighbours + sensor tel
 
 The only BLE example, so the `@stoprocent/noble` scan/connect/discover flow is inlined here. It builds a transport with `createBleTransport` and then does the same "get contacts" action as Task 3, over BLE.
 
-`@stoprocent/noble` is a maintained noble fork that ships TypeScript types (exporting `Peripheral`, `Characteristic`, `ServicesAndCharacteristics`, …) and a promise-first API (`waitForPoweredOnAsync`, `*Async` methods). The example is fully typed — no `any`, no ambient shim.
+`@stoprocent/noble` is a maintained noble fork that ships TypeScript types (exporting `Peripheral`, `Characteristic`, `ServicesAndCharacteristics`, …) and a promise-first API (`waitForPoweredOn`, `*Async` methods). The example is fully typed — no `any`, no ambient shim.
 
 - [ ] **Step 1: Create `examples/ble-get-contacts.ts`**
 
@@ -814,7 +814,7 @@ const RX = toNoble(NORDIC_UART.rxWrite); // host → device
 const TX = toNoble(NORDIC_UART.txNotify); // device → host
 
 async function main(): Promise<void> {
-  await noble.waitForPoweredOnAsync();
+  await noble.waitForPoweredOn();
 
   console.log('Scanning for a MeshCore device…');
   await noble.startScanningAsync([SERVICE], false);

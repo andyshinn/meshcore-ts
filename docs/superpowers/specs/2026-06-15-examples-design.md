@@ -142,7 +142,7 @@ The only BLE example, so the `@stoprocent/noble` flow is inlined here rather
 than shared. `@stoprocent/noble` is a maintained, TypeScript-first noble fork,
 so the example is fully typed (no `any`, no ambient shim):
 
-1. `await noble.waitForPoweredOnAsync()`.
+1. `await noble.waitForPoweredOn()`.
 2. `await startScanningAsync([NORDIC_UART.service], false)` → resolve first `discover`.
 3. `connectAsync()` → `discoverSomeServicesAndCharacteristicsAsync([NORDIC_UART.service], [NORDIC_UART.rxWrite, NORDIC_UART.txNotify])`.
 4. `createBleTransport({ write, subscribe, watchState })` per the docs recipe:
