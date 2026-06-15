@@ -70,9 +70,12 @@ near-pure plumbing.
 - **BLE ergonomic:** **ship both** — a hooks factory as the core, plus a thin
   abstract base class wrapper over it.
 - **Connection ownership:** the transport **observes and frames; the user opens
-  and connects** the handle (mirrors the reference's `WebSerialConnection`, which
-  takes an already-opened port). Keeps `meshcore-ts` out of connection management
-  and free of device-library dependencies.
+  and connects** the handle — keeping `meshcore-ts` out of connection management
+  and free of device-library dependencies. It does **not** assume the handle is
+  already open: Node `serialport` opens asynchronously after construction, so the
+  transport tracks state from `port.isOpen` plus the `'open'`/`'close'`/`'error'`
+  events (unlike browser WebSerial, where the port is opened before the
+  connection object exists).
 
 ## Architecture & packaging
 
@@ -102,7 +105,8 @@ export function encodeSerialFrame(payload: Uint8Array): Uint8Array;
 // Resync-tolerant stream de-framer. Feed it raw bytes as they arrive; it returns
 // zero or more complete companion-frame payloads, buffering any partial tail.
 export class SerialDeframer {
-  constructor(opts?: { maxBufferBytes?: number; onOverflow?: (droppedBytes: number) => void });
+  // maxFrameBytes default 256 (firmware MAX_FRAME_SIZE is currently 176 — see BaseSerialInterface.h).
+  constructor(opts?: { maxFrameBytes?: number });
   push(bytes: Uint8Array): Uint8Array[];
   reset(): void;
 }
@@ -114,8 +118,10 @@ export class SerialDeframer {
 2. While buffer length ≥ 3 (header size):
    - Read `type` (byte 0). If it is neither `0x3c` nor `0x3e`, **drop one byte**
      and retry (resync past garbage).
-   - Read `length` (bytes 1–2, uint16 LE). If `length === 0`, **drop one byte**
-     and retry.
+   - Read `length` (bytes 1–2, uint16 LE). If `length === 0` **or
+     `length > maxFrameBytes`**, **drop one byte** and retry — a length larger
+     than any real companion frame means the type byte was spurious, so resync
+     rather than wait for bytes that will never come.
    - If buffer has fewer than `3 + length` bytes, **break** (wait for more).
    - Otherwise slice `payload = buffer[3 .. 3+length]`, push it to the output
      list, and advance the buffer past the whole frame.
@@ -125,12 +131,16 @@ It accepts both `0x3e` (the real device→host marker) and `0x3c` as valid type
 bytes, matching the reference's tolerance. It **never throws** on a malformed
 stream — it resyncs.
 
-**Buffer guard:** the constructor accepts an optional `maxBufferBytes`
-(default 64 KiB). If the internal buffer exceeds it without yielding a frame, the
-de-framer drops the buffer down to the last `maxBufferBytes` bytes (keeping the
-newest, since a valid frame can only complete from later data) and invokes an
-optional `onOverflow?(droppedBytes: number)` callback so the caller can log it.
-This caps growth on a stream that never resyncs; it never throws.
+**Why the buffer stays tiny:** this is a *reassembly* buffer, not a
+fill-before-flush batch buffer. Bytes accumulate only until one complete frame is
+decoded, then that frame's bytes are removed immediately. In normal operation it
+holds at most one partial frame — and companion frames are small (firmware
+`MAX_FRAME_SIZE = 176`, `MAX_CHANNEL_DATA_LENGTH = 163`). The only way it could
+grow is a *corrupt* header that declares a huge `length`; the
+`length > maxFrameBytes` resync above caps that, bounding the buffer to
+`3 + maxFrameBytes` (~259 bytes by default) without ever throwing. There is no
+raw byte-count cap and no overflow callback — the semantic frame-length check is
+the guard.
 
 ## Component 2 — `SerialTransport` (duck-typed constructor)
 
@@ -140,13 +150,14 @@ handle described by a local structural type:
 ```ts
 export interface SerialPortLike {
   write(bytes: Uint8Array): unknown;                 // node-serialport returns boolean; ignored
+  readonly isOpen?: boolean;                         // node-serialport exposes this
   on(event: 'data', cb: (chunk: Uint8Array) => void): unknown;
   on(event: 'open' | 'close', cb: () => void): unknown;
   on(event: 'error', cb: (err: Error) => void): unknown;
 }
 
 export class SerialTransport implements Transport {
-  constructor(port: SerialPortLike, opts?: { assumeOpen?: boolean; maxBufferBytes?: number });
+  constructor(port: SerialPortLike, opts?: { maxFrameBytes?: number });
 }
 ```
 
@@ -157,11 +168,16 @@ Wiring:
 - `send(frame)` → `port.write(encodeSerialFrame(frame))`; a thrown/rejected write
   rejects the returned promise (the session already handles write rejection in
   `request`, `src/session/session.ts`).
-- State mapping → `onStateChange`: `open` → `'connected'`, `close` → `'idle'`,
-  `error` → `'error'`. If `assumeOpen` (default true — `serialport` opens before
-  you hand it over), emit `'connected'` on the next microtask so a session that
-  starts already-connected kicks its handshake (`session.start()` checks
-  `getState() === 'connected'`).
+- **State, no open-assumption:** unlike WebSerial — where the browser opens the
+  port *before* you construct the connection — Node `serialport` opens
+  asynchronously, after construction. So the transport derives state from the
+  handle rather than assuming. Initial state is `'connected'` when `port.isOpen`
+  is already truthy (caller opened it first), else `'connecting'`. Then events
+  drive transitions via `onStateChange`: `'open'` → `'connected'`, `'close'` →
+  `'idle'`, `'error'` → `'error'`. (When the initial state is already
+  `'connected'`, emit it on the next microtask so `session.start()`'s
+  `getState() === 'connected'` check still kicks the handshake.) The transport
+  never opens the port itself — the user owns that.
 
 Because the codec is exported, a Node TCP socket or browser Web Serial source can
 reuse `SerialDeframer`/`encodeSerialFrame` with a few lines — no extra adapter
@@ -217,9 +233,9 @@ export const NORDIC_UART = {
 
 ## Error handling
 
-- De-framer resyncs (drops a byte) rather than throwing on a bad type byte or
-  zero length; partial frames wait for more bytes.
-- `maxBufferBytes` guards against a never-resyncing stream.
+- De-framer resyncs (drops a byte) rather than throwing on a bad type byte, a
+  zero length, or a length exceeding `maxFrameBytes`; partial frames wait for
+  more bytes. This bounds the reassembly buffer to one real frame.
 - Write failures reject `send()`; the session surfaces them through its existing
   request/ack paths.
 - The transport does not auto-reconnect; reconnection is the user's concern (they
@@ -230,7 +246,8 @@ export const NORDIC_UART = {
 - **`serialFraming` (pure):** encode→deframe round-trips; byte-by-byte feeding;
   multiple frames coalesced in one chunk; leading/interleaved garbage; `0x3c` vs
   `0x3e` type bytes; zero-length header; truncated tail then completion;
-  `maxBufferBytes` overflow behavior.
+  oversized-`length` header (> `maxFrameBytes`) triggers resync, not unbounded
+  buffering; a real 176-byte max frame still decodes.
 - **`SerialTransport`:** drive a fake `SerialPortLike` (emit `data`/`open`/`close`/
   `error`); assert whole frames reach `onData`, `send` writes the encoded bytes,
   and state transitions fire. No hardware.
