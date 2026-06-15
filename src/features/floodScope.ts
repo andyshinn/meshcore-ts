@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { CMD, RESP } from '../codes';
 import type { FeatureContext } from '../feature';
 
@@ -88,4 +89,19 @@ export async function getDefaultFloodScope(ctx: FeatureContext): Promise<Default
     expect: RESP.DEFAULT_FLOOD_SCOPE,
   });
   return decodeDefaultFloodScope(frame);
+}
+
+// Derive the 16-byte flood-scope key for a public hashtag region, matching the
+// reference's TransportKeyUtil.getHashtagRegionKey: normalize to "#name",
+// SHA-256 the UTF-8 bytes, and take the first 16 bytes (the firmware uses the
+// first half of the 32-byte hash as the scope key). Returns 32 hex chars.
+export function deriveFloodScopeKey(region: string): string {
+  const normalized = region.startsWith('#') ? region : `#${region}`;
+  return createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 32);
+}
+
+// Convenience: derive the key for a region name and apply it as the send-scope
+// override (CMD_SET_FLOOD_SCOPE_KEY).
+export async function setFloodScopeRegion(ctx: FeatureContext, region: string): Promise<void> {
+  await setFloodScopeKey(ctx, { keyHex: deriveFloodScopeKey(region) });
 }

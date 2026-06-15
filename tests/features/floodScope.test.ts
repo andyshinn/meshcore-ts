@@ -1,12 +1,16 @@
 import { Buffer } from 'node:buffer';
-import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
+import { CMD } from '../../src/codes';
 import {
   decodeDefaultFloodScope,
+  deriveFloodScopeKey,
   encodeClearDefaultFloodScope,
   encodeGetDefaultFloodScope,
   encodeSetDefaultFloodScope,
   encodeSetFloodScopeKey,
 } from '../../src/features/floodScope';
+import { makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');
 const KEY = 'aa'.repeat(16);
@@ -64,5 +68,36 @@ describe('floodScope: decodeDefaultFloodScope', () => {
 
   it('returns null for the 1-byte no-scope form', () => {
     expect(decodeDefaultFloodScope(Buffer.from([0x1c]))).toBeNull();
+  });
+});
+
+describe('floodScope: deriveFloodScopeKey', () => {
+  const sha16 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 32);
+
+  it('returns the first 16 bytes of SHA-256("#region") as hex', () => {
+    expect(deriveFloodScopeKey('#MyRegion')).toBe(sha16('#MyRegion'));
+    expect(deriveFloodScopeKey('#MyRegion')).toHaveLength(32);
+  });
+
+  it('prepends "#" when absent (so "Region" and "#Region" match)', () => {
+    expect(deriveFloodScopeKey('Region')).toBe(sha16('#Region'));
+    expect(deriveFloodScopeKey('Region')).toBe(deriveFloodScopeKey('#Region'));
+  });
+});
+
+describe('floodScope: setFloodScopeRegion (session)', () => {
+  it('writes CMD_SET_FLOOD_SCOPE_KEY with the derived 16-byte key', async () => {
+    const { session, transport } = makeSession();
+    // setFloodScopeRegion awaits the shared RESP_OK/ERR ack; feed the ack after
+    // the frame lands, mirroring the setChannel test pattern.
+    const promise = session.setFloodScopeRegion('#TestRegion');
+    await vi.waitFor(() => expect(transport.sent).toHaveLength(1));
+    transport.receive(Uint8Array.from([0x00])); // RESP_OK
+    await promise;
+    const sent = Buffer.from(transport.sent[0]);
+    expect(sent[0]).toBe(CMD.SET_FLOOD_SCOPE_KEY);
+    expect(sent[1]).toBe(0x00);
+    expect(sent.subarray(2).toString('hex')).toBe(deriveFloodScopeKey('#TestRegion'));
+    expect(sent.subarray(2)).toHaveLength(16);
   });
 });

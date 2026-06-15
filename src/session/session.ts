@@ -1239,6 +1239,12 @@ export class MeshCoreSession {
     return floodScope.setFloodScopeKey(this.ctx, input);
   }
 
+  /** Derive the 16-byte key for a public hashtag region and set it as the
+   *  send-scope override. Shorthand for setFloodScopeKey({ keyHex }). */
+  async setFloodScopeRegion(region: string): Promise<void> {
+    return floodScope.setFloodScopeRegion(this.ctx, region);
+  }
+
   /** Persist the default flood scope (CMD_SET_DEFAULT_FLOOD_SCOPE). */
   async setDefaultFloodScope(name: string, keyHex: string): Promise<void> {
     return floodScope.setDefaultFloodScope(this.ctx, name, keyHex);
