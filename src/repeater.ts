@@ -387,8 +387,8 @@ export function buildGetStats(subtype: (typeof STATS_TYPE)[keyof typeof STATS_TY
 // CMD_SEND_BINARY_REQ (0x32) — `[0x32][32B pubkey][req_type byte + req_data]`.
 // The reply comes back as PUSH_BINARY_RESPONSE tagged with the same u32 the
 // firmware echoes in RESP_SENT. Used for REQ_TYPE_GET_ACCESS_LIST,
-// REQ_TYPE_GET_NEIGHBOURS, REQ_TYPE_GET_OWNER_INFO — anything other than
-// STATUS/TELEMETRY which have dedicated CMD opcodes already.
+// REQ_TYPE_GET_NEIGHBOURS, REQ_TYPE_GET_OWNER_INFO, REQ_TYPE_GET_AVG_MIN_MAX —
+// anything other than STATUS/TELEMETRY which have dedicated CMD opcodes already.
 export function buildSendBinaryReq(destPublicKeyHex: string, reqData: Buffer): Buffer {
   const pubkey = Buffer.from(destPublicKeyHex, 'hex');
   if (pubkey.length < 32) {

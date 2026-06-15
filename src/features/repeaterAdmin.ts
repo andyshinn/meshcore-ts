@@ -325,7 +325,7 @@ export async function repeaterRequestAvgMinMax(
   reqData[0] = REQ_TYPE.GET_AVG_MIN_MAX;
   reqData.writeUInt32LE(opts.startSecsAgo >>> 0, 1);
   reqData.writeUInt32LE(opts.endSecsAgo >>> 0, 5);
-  // bytes 9,10 reserved = 0 (firmware returns no data unless both are zero)
+  // bytes 9-10 reserved; firmware ignores the request if either is non-zero
   const payload = await sendBinaryReq(ctx, contactKey, reqData);
   const parsed = parseAvgMinMax(payload);
   if (!parsed) throw new Error('failed to parse avg/min/max response');
