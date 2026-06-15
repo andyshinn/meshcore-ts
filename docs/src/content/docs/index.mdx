@@ -4,8 +4,7 @@ description: Application-agnostic MeshCore companion-protocol library for Node.j
 template: splash
 hero:
   tagline: >-
-    Speak the MeshCore companion-radio wire protocol. You bring a Transport;
-    the library does everything above that line and emits typed events.
+    A MeshCore companion TypeScript library for Node.js.
   actions:
     - text: Getting started
       link: guides/getting-started/
@@ -20,7 +19,9 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+<Aside title="Node only">We use `node:buffer` and `node:crypto` which means this library doesn't work in the browser.</Aside>
 
 ## Install
 
@@ -28,7 +29,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 npm install @andyshinn/meshcore-ts
 ```
 
-> **Node-only.** Uses `node:buffer` and `node:crypto`. Not a browser build.
+
 
 <CardGrid>
   <Card title="Stateful session, injected ports" icon="puzzle">
