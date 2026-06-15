@@ -191,3 +191,48 @@ describe('session: getContacts (active re-fetch)', () => {
     expect(contacts.some((c) => c.name === 'Alice')).toBe(true);
   });
 });
+
+// ============================================================================
+// (d) find helpers
+// ============================================================================
+
+describe('session: find helpers', () => {
+  const channelInfo = (idx: number, name: string, keyHex: string) => {
+    const f = Buffer.alloc(50);
+    f[0] = 0x12;
+    f[1] = idx;
+    Buffer.from(name, 'utf8').copy(f, 2);
+    Buffer.from(keyHex, 'hex').copy(f, 34);
+    return f;
+  };
+
+  it('findChannelByName / findChannelBySecret match seeded channels', () => {
+    const { session, transport } = makeSession();
+    transport.receive(channelInfo(0, 'Public', 'ab'.repeat(16)));
+    expect(session.findChannelByName('Public')?.idx).toBe(0);
+    expect(session.findChannelByName('Nope')).toBeNull();
+    expect(session.findChannelBySecret('AB'.repeat(16))?.name).toBe('Public'); // case-insensitive
+    expect(session.findChannelBySecret('00'.repeat(16))).toBeNull();
+  });
+
+  it('findContactByName / findContactByPublicKeyPrefix match a seeded contact (case-insensitive)', () => {
+    const { session, transport } = makeSession();
+    const start = Buffer.alloc(5);
+    start[0] = 0x02; // RESP_CONTACTS_START
+    start.writeUInt32LE(1, 1);
+    transport.receive(start);
+    // One RESP_CONTACT (148 bytes) — layout per decodeContact in src/features/contacts.ts:
+    //   [0]=0x03, [1..33)=pubkey 32B, [33]=type, [34]=flags, [35]=outPathLen,
+    //   [36..100)=path 64B, [100..132)=name 32B null-padded, [132..136)=lastAdvert u32LE, ...
+    const contact = Buffer.alloc(148);
+    contact[0] = 0x03;
+    Buffer.from('ee'.repeat(32), 'hex').copy(contact, 1);
+    Buffer.from('Bob', 'utf8').copy(contact, 100); // name offset 100
+    transport.receive(contact);
+    transport.receive(Buffer.from([0x04, 0, 0, 0, 0])); // RESP_END_OF_CONTACTS
+
+    expect(session.findContactByName('Bob')?.publicKeyHex).toBe('ee'.repeat(32));
+    expect(session.findContactByPublicKeyPrefix('EEEE')?.name).toBe('Bob');
+    expect(session.findContactByPublicKeyPrefix('ffff')).toBeNull();
+  });
+});

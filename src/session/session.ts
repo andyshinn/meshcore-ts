@@ -976,6 +976,29 @@ export class MeshCoreSession {
     return getContactByKey(this.ctx, destPublicKeyHex);
   }
 
+  /** Find a contact in current session state by exact display name, or null. */
+  findContactByName(name: string): Contact | null {
+    return this.state.getContacts().find((c) => c.name === name) ?? null;
+  }
+
+  /** Find a contact whose public key starts with the given hex prefix
+   *  (case-insensitive), or null. */
+  findContactByPublicKeyPrefix(prefixHex: string): Contact | null {
+    const p = prefixHex.toLowerCase();
+    return this.state.getContacts().find((c) => c.publicKeyHex.toLowerCase().startsWith(p)) ?? null;
+  }
+
+  /** Find a channel in current session state by exact name, or null. */
+  findChannelByName(name: string): Channel | null {
+    return this.state.getChannels().find((c) => c.name === name) ?? null;
+  }
+
+  /** Find a channel by its 16-byte secret (hex, case-insensitive), or null. */
+  findChannelBySecret(secretHex: string): Channel | null {
+    const s = secretHex.toLowerCase();
+    return this.state.getChannels().find((c) => (c.secretHex ?? '').toLowerCase() === s) ?? null;
+  }
+
   /** Actively re-query the radio's self-info (APP_START → RESP_SELF_INFO),
    *  publish it as the Owner, and return it. Intended for use while connected;
    *  on a dead link it resolves only after the watchdog/request timeout. */
