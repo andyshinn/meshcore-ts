@@ -27,7 +27,10 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "biome check",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
+    "docs:preview": "npm --prefix docs run preview"
   },
   "engines": {
     "node": ">=20"

@@ -5,3 +5,8 @@ coverage/
 .DS_Store
 .env
 .env.local
+
+# docs site (Astro/Starlight)
+docs/.astro/
+docs/dist/
+docs/src/content/docs/api/
