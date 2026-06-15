@@ -37,7 +37,7 @@ import { encodeSetPathHashMode, pathHashSizeToMode } from '../features/pathHash'
 import { encodeSetRadioParams, encodeSetRadioTxPower } from '../features/radioParams';
 import * as rawData from '../features/rawData';
 import * as repeaterAdmin from '../features/repeaterAdmin';
-import { encodeAppStart, selfInfoFeature } from '../features/selfInfo';
+import { applySelfInfo, encodeAppStart, selfInfoFeature, type SelfInfo } from '../features/selfInfo';
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
@@ -49,7 +49,7 @@ import type { Transport } from '../ports/transport';
 import { FeatureRegistry } from '../registry';
 import type { AclEntry, AvgMinMaxResult, LocalStats, LoginSuccess, NeighboursPage, OwnerInfo, TraceData } from '../repeater';
 import { SessionState } from '../state/model';
-import type { Channel, ContactKind, RawPacket, SyncProgress, TransportState } from '../types';
+import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../types';
 import { DEFAULT_SYNC_PROGRESS } from '../types';
 import { type AdminMode, AdminSessionStore } from './adminSessions';
 import { createSessionRuntime, type SessionRuntime } from './runtime';
@@ -150,6 +150,9 @@ export class MeshCoreSession {
   /** High-level handshake progress surfaced to the UI footer. Updated as we
    *  enumerate channel slots (and, later, contacts) during handshake. */
   private syncProgress: SyncProgress = { ...DEFAULT_SYNC_PROGRESS };
+  /** Serializes device-sync operations (handshake + active re-fetch getters)
+   *  that share the single-use armWaiter slots and the typed-reply FIFO. */
+  private syncLock: Promise<unknown> = Promise.resolve();
   /** Resolved when RESP_CONTACTS_START arrives during the handshake, so the
    *  channel-enumeration loop can wait for the contact total and avoid the
    *  progress bar jumping backwards when total grows mid-sync. */
@@ -621,7 +624,43 @@ export class MeshCoreSession {
     });
   }
 
+  /** Run `fn` once the previous sync operation settles, so concurrent
+   *  handshake/getContacts/getChannels/getSelfInfo calls don't clobber the
+   *  shared waiter slots. Errors propagate to the caller but never poison the
+   *  lock for the next operation. */
+  private withSyncLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.syncLock.then(fn, fn);
+    this.syncLock = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   private async handshake(): Promise<void> {
+    // Hold the sync lock for the duration of the handshake so user-facing
+    // getters (getSelfInfo / getContacts / getChannels) queue behind us instead
+    // of racing on the shared armWaiter slots. We do the lock-chain setup here
+    // synchronously (before the first `await handshakeInner()`) so the very
+    // first handshake write (DEVICE_QUERY) still fires in the same synchronous
+    // turn as the `void this.handshake()` call — preserving existing test
+    // expectations that clear transport.sent immediately after setState.
+    let releaseLock!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    this.syncLock = this.syncLock.then(
+      () => lockHeld,
+      () => lockHeld,
+    );
+    try {
+      await this.handshakeInner();
+    } finally {
+      releaseLock();
+    }
+  }
+
+  private async handshakeInner(): Promise<void> {
     this.updateSyncProgress({
       phase: 'syncing',
       channels: { done: 0, total: CHANNEL_SLOT_COUNT },
@@ -931,6 +970,46 @@ export class MeshCoreSession {
   /** Look up a single contact on the radio by public key, or null if absent. */
   async getContactByKey(destPublicKeyHex: string): Promise<ContactRecord | null> {
     return getContactByKey(this.ctx, destPublicKeyHex);
+  }
+
+  /** Actively re-query the radio's self-info (APP_START → RESP_SELF_INFO),
+   *  publish it as the Owner, and return it. */
+  async getSelfInfo(): Promise<SelfInfo> {
+    return this.withSyncLock(async () => {
+      const frame = await this.request(encodeAppStart(this.appName, this.appVersion), { expect: RESP.SELF_INFO });
+      const info = applySelfInfo(this.ctx, frame);
+      if (!info) throw new Error('failed to decode self-info');
+      return info;
+    });
+  }
+
+  /** Actively re-enumerate the radio's contact store (GET_CONTACTS) and resolve
+   *  the fresh list. Reuses the handshake's contact-stream waiters. */
+  async getContacts(): Promise<Contact[]> {
+    return this.withSyncLock(async () => {
+      const start = this.armWaiter('contactsStartWaiter', CONTACTS_START_WAIT_MS);
+      const done = this.armWaiter('contactsDoneWaiter', CONTACTS_DONE_WAIT_MS);
+      await this.writeFrame(encodeGetContacts());
+      await start;
+      await done;
+      return this.state.getContacts();
+    });
+  }
+
+  /** Actively re-enumerate channel slots (GET_CHANNEL 0..N-1) and resolve the
+   *  fresh list. */
+  async getChannels(): Promise<Channel[]> {
+    return this.withSyncLock(async () => {
+      for (let i = 0; i < CHANNEL_SLOT_COUNT; i += 1) {
+        await channels.getChannel(this.ctx, i);
+      }
+      return this.state.getChannels();
+    });
+  }
+
+  /** Actively re-query a single channel slot. */
+  async getChannel(idx: number): Promise<Channel | null> {
+    return this.withSyncLock(() => channels.getChannel(this.ctx, idx));
   }
 
   // ---- Channels ----------------------------------------------------------
