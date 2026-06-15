@@ -10,7 +10,11 @@ You bring a **Transport** (the bytes in/out of your radio); the library does eve
 npm install @andyshinn/meshcore-ts
 ```
 
-> **Node-only.** Uses `node:buffer` and `node:crypto`. Not a browser build.
+> [!NOTE]
+> This is a Node-only package since it requires `node:buffer` and `node:crypto`. It doesn't work in the browser.
+
+## Vibe Coded Warning
+This package was mostly written with the assistance of Claude. While I use this for my own personal projects it should be noted I am not a TypeScript expert. There may be quality issues with the package or you may have qualms about using LLM generated code. Consider this your "AI warning".
 
 ## Design in one breath
 
@@ -116,6 +120,19 @@ Messaging (`sendChannelText`, `sendDmText`, `sendDmTextWithRetry`), contacts & p
 ## Extending the protocol
 
 The session dispatches inbound frames through a `FeatureRegistry` of `Feature` modules (each owns the wire codes it reacts to and reads its dependencies from an injected `FeatureContext`). This is the library's extension model — see `src/feature.ts`.
+
+## Examples
+
+Runnable examples live in [`examples/`](examples/) — the meshcore.js example set
+ported onto `MeshCoreSession` using the built-in serial and BLE transports. Run
+any of them with `tsx` (no build step):
+
+```
+npm run example examples/get-contacts.ts /dev/cu.usbmodemXXXX
+```
+
+See [`examples/README.md`](examples/README.md) for the full list. The
+`parse-packet` / `parse-advert` examples run with no hardware.
 
 ## Scripts
 
