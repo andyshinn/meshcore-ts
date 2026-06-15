@@ -125,6 +125,7 @@ session.start();
 
 ```ts
 import { Buffer } from 'buffer';
+import { MeshCoreSession } from '@andyshinn/meshcore-ts';
 import { createBleTransport } from '@andyshinn/meshcore-ts/transports';
 
 const transport = createBleTransport({
@@ -139,4 +140,6 @@ const transport = createBleTransport({
   watchState: (onState) =>
     device.onDisconnected(() => onState('idle')),
 });
+const session = new MeshCoreSession({ transport });
+session.start();
 ```
