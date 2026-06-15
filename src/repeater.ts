@@ -681,8 +681,8 @@ function decodeSeriesFloat(buf: Buffer, size: number, multiplier: number, signed
   let value = 0;
   for (let i = 0; i < size; i += 1) value = value * 256 + buf[i];
   if (signed) {
-    const max = 2 ** (size * 8);
-    if (value >= max / 2) value -= max;
+    const boundary = 2 ** (size * 8);
+    if (value >= boundary / 2) value -= boundary;
   }
   return value / multiplier;
 }

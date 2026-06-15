@@ -152,9 +152,10 @@ describe('parseAvgMinMax', () => {
     body.writeInt16BE(200, 6); // min 20.0
     body.writeInt16BE(255, 8); // max 25.5
     body.writeInt16BE(225, 10); // avg 22.5
-    const res = parseAvgMinMax(body)!;
-    expect(res.nowUnix).toBe(1000);
-    expect(res.series).toEqual([
+    const res = parseAvgMinMax(body);
+    expect(res).not.toBeNull();
+    expect(res?.nowUnix).toBe(1000);
+    expect(res?.series).toEqual([
       { channel: 1, lppType: 0x67, typeHex: '0x67', name: 'Temperature', unit: '°C', min: 20, max: 25.5, avg: 22.5 },
     ]);
   });
@@ -167,9 +168,10 @@ describe('parseAvgMinMax', () => {
     body.writeUInt16BE(0xffff, 6); // min
     body.writeUInt16BE(0xffff, 8); // max
     body.writeUInt16BE(0xffff, 10); // avg
-    const res = parseAvgMinMax(body)!;
+    const res = parseAvgMinMax(body);
+    expect(res).not.toBeNull();
     // 65535 / 1000 = 65.535 (NOT negative)
-    expect(res.series[0]).toMatchObject({ lppType: 0x75, name: 'Current', unit: 'A', min: 65.535 });
+    expect(res?.series[0]).toMatchObject({ lppType: 0x75, name: 'Current', unit: 'A', min: 65.535 });
   });
 
   it('returns null on a body too short for "now"', () => {
@@ -181,8 +183,45 @@ describe('parseAvgMinMax', () => {
     body.writeUInt32LE(5, 0);
     body[4] = 1;
     body[5] = 0x67;
-    const res = parseAvgMinMax(body)!;
-    expect(res.nowUnix).toBe(5);
-    expect(res.series).toEqual([]);
+    const res = parseAvgMinMax(body);
+    expect(res).not.toBeNull();
+    expect(res?.nowUnix).toBe(5);
+    expect(res?.series).toEqual([]);
+  });
+
+  it('falls back to size 1 + name "Unknown" for an unrecognised lpp type', () => {
+    const body = Buffer.alloc(4 + 2 + 3); // now + [channel][type] + 3×(size-1)
+    body.writeUInt32LE(99, 0);
+    body[4] = 0; // channel
+    body[5] = 0xff; // unknown type
+    body[6] = 10;
+    body[7] = 20;
+    body[8] = 15; // min/max/avg raw (size 1, mult 1)
+    const res = parseAvgMinMax(body);
+    expect(res?.series[0]).toMatchObject({ name: 'Unknown', min: 10, max: 20, avg: 15 });
+  });
+
+  it('parses two consecutive entries (Temperature then Humidity)', () => {
+    // Temperature (0x67): size 2, /10, signed
+    // Humidity (0x68): size 2, /10, unsigned  ← per avgMinMaxSize/avgMinMaxMultiplier tables
+    const body = Buffer.alloc(4 + (2 + 2 * 3) + (2 + 2 * 3)); // now + entryA(8) + entryB(8)
+    body.writeUInt32LE(500, 0);
+    // Entry A: Temperature, channel 1
+    body[4] = 1;
+    body[5] = 0x67; // Temperature
+    body.writeInt16BE(200, 6); // min = 20.0°C
+    body.writeInt16BE(300, 8); // max = 30.0°C
+    body.writeInt16BE(250, 10); // avg = 25.0°C
+    // Entry B: Humidity, channel 2
+    body[12] = 2;
+    body[13] = 0x68; // Humidity
+    body.writeUInt16BE(400, 14); // min = 40.0%
+    body.writeUInt16BE(600, 16); // max = 60.0%
+    body.writeUInt16BE(500, 18); // avg = 50.0%
+    const res = parseAvgMinMax(body);
+    expect(res).not.toBeNull();
+    expect(res?.nowUnix).toBe(500);
+    expect(res?.series[0]).toMatchObject({ channel: 1, name: 'Temperature', unit: '°C', min: 20, max: 30, avg: 25 });
+    expect(res?.series[1]).toMatchObject({ channel: 2, name: 'Humidity', unit: '%', min: 40, max: 60, avg: 50 });
   });
 });
