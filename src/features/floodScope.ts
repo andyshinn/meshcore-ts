@@ -97,7 +97,10 @@ export async function getDefaultFloodScope(ctx: FeatureContext): Promise<Default
 // first half of the 32-byte hash as the scope key). Returns 32 hex chars.
 export function deriveFloodScopeKey(region: string): string {
   const normalized = region.startsWith('#') ? region : `#${region}`;
-  return createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 32);
+  return createHash('sha256')
+    .update(normalized, 'utf8')
+    .digest('hex')
+    .slice(0, SCOPE_KEY_LEN * 2);
 }
 
 // Convenience: derive the key for a region name and apply it as the send-scope

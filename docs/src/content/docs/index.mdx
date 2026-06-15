@@ -1,6 +1,51 @@
 ---
 title: meshcore-ts
-description: Application-agnostic MeshCore companion-protocol library for Node.js.
+description: Application-agnostic MeshCore companion-protocol library for Node.js, in TypeScript.
+template: splash
+hero:
+  tagline: >-
+    Speak the MeshCore companion-radio wire protocol. You bring a Transport;
+    the library does everything above that line and emits typed events.
+  actions:
+    - text: Getting started
+      link: guides/getting-started/
+      icon: right-arrow
+    - text: API reference
+      link: api/readme/
+      icon: open-book
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/andyshinn/meshcore-ts
+      icon: external
+      variant: minimal
 ---
 
-Documentation site bootstrap. Replaced in a later task.
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Install
+
+```sh
+npm install @andyshinn/meshcore-ts
+```
+
+> **Node-only.** Uses `node:buffer` and `node:crypto`. Not a browser build.
+
+<CardGrid>
+  <Card title="Stateful session, injected ports" icon="puzzle">
+    Construct a `MeshCoreSession` with an injected `Transport` (and optional
+    `Logger`). The session owns a typed event emitter and an in-memory
+    `SessionState`; it never writes to disk.
+  </Card>
+  <Card title="You own persistence" icon="document">
+    Subscribe to events (`contacts`, `messages`, `owner`, …) and store them
+    however you want. On reconnect the session re-syncs from the radio.
+  </Card>
+  <Card title="Zero runtime dependencies" icon="rocket">
+    Only `node:buffer` / `node:crypto`. BLE/serial drivers stay your
+    responsibility behind the `Transport` port.
+  </Card>
+  <Card title="Multi-instance safe" icon="setting">
+    No module-level singletons — every session keeps its own state, so you can
+    run several concurrently in one process.
+  </Card>
+</CardGrid>

@@ -34,12 +34,9 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { label: 'Getting started', slug: 'guides/getting-started' },
-            // Task 4 will create these pages; using `link` avoids a hard build error
-            // when slug-based references point to non-existent content collection entries.
-            // Switch back to `slug` once the pages exist.
-            { label: 'Transports', link: 'guides/transports' },
-            { label: 'Messaging', link: 'guides/messaging' },
-            { label: 'Events & state', link: 'guides/events-and-state' },
+            { label: 'Transports', slug: 'guides/transports' },
+            { label: 'Messaging', slug: 'guides/messaging' },
+            { label: 'Events & state', slug: 'guides/events-and-state' },
           ],
         },
         typeDocSidebarGroup,

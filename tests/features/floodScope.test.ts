@@ -77,6 +77,8 @@ describe('floodScope: deriveFloodScopeKey', () => {
   it('returns the first 16 bytes of SHA-256("#region") as hex', () => {
     expect(deriveFloodScopeKey('#MyRegion')).toBe(sha16('#MyRegion'));
     expect(deriveFloodScopeKey('#MyRegion')).toHaveLength(32);
+    // golden vector: SHA-256('#MyRegion')[:16]
+    expect(deriveFloodScopeKey('#MyRegion')).toBe('03dce792b80979a6e2c600a19f16e766');
   });
 
   it('prepends "#" when absent (so "Region" and "#Region" match)', () => {
