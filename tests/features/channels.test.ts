@@ -105,13 +105,29 @@ describe('channels: getChannel', () => {
   });
 
   it('resolves null for an empty slot (requestOrNull → null)', async () => {
+    const state = new SessionState();
     const ctx = {
       requestOrNull: async () => null,
       events: new MeshCoreEvents(),
-      state: new SessionState(),
+      state,
       log: noopLogger,
       rt: { channels: createChannelsRuntime() },
     } as unknown as FeatureContext;
     expect(await getChannel(ctx, 5)).toBeNull();
+    expect(state.getChannels()).toHaveLength(0);
+  });
+
+  it('resolves null for a decoded-but-empty slot (all-zero key) and does not touch state', async () => {
+    const frame = channelInfoFrame(3, '', '00'.repeat(16));
+    const state = new SessionState();
+    const ctx = {
+      requestOrNull: async () => frame,
+      events: new MeshCoreEvents(),
+      state,
+      log: noopLogger,
+      rt: { channels: createChannelsRuntime() },
+    } as unknown as FeatureContext;
+    expect(await getChannel(ctx, 3)).toBeNull();
+    expect(state.getChannels()).toHaveLength(0);
   });
 });

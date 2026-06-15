@@ -225,9 +225,9 @@ export function applyChannelInfo(ctx: FeatureContext, frame: Buffer): Channel | 
 }
 
 /** Actively re-query a single channel slot (CMD_GET_CHANNEL) and apply the
- *  reply. Resolves the decoded Channel, or null for an empty/missing slot
- *  (RESP_ERR). Uses requestOrNull so an empty-slot RESP_ERR is consumed via the
- *  ack FIFO instead of being mistaken for a rejected send. */
+ *  reply. Resolves the decoded Channel, or null for a missing/empty slot.
+ *  Uses requestOrNull so that a RESP_ERR ("not found") is consumed via the
+ *  shared ack FIFO and cannot be mistaken for a rejected DM send. */
 export async function getChannel(ctx: FeatureContext, idx: number): Promise<Channel | null> {
   const frame = await ctx.requestOrNull(encodeGetChannel(idx), RESP.CHANNEL_INFO);
   if (!frame) return null;
