@@ -30,7 +30,7 @@ Two design facts shape everything:
 | Decision | Choice |
 | --- | --- |
 | What examples connect to | Real hardware via the library's built-in transports |
-| Transports showcased | Serial (all 12 meshcore.js examples) **+ one BLE example** (`@abandonware/noble`). No TCP. |
+| Transports showcased | Serial (all 12 meshcore.js examples) **+ one BLE example** (`@stoprocent/noble`). No TCP. |
 | Import style | Package-name imports (`@andyshinn/meshcore-ts`, `@andyshinn/meshcore-ts/transports`) via a tsconfig `paths` alias → `../src`, run with `tsx` (zero build) |
 | Serial session setup | Inline in each example (~4 lines) for top-to-bottom readability, not a shared bootstrap helper |
 | Shared code | Only `requirePort` (arg parsing) and `waitForEvent` (event-driven request/response) in `examples/lib/helpers.ts` |
@@ -42,7 +42,7 @@ workflow changes beyond the typecheck script.
 ## Architecture
 
 `examples/` is **not** a separate npm project (unlike `docs/`). It runs against
-the repo's own `src/` via `tsx`, with `serialport`, `@abandonware/noble`, and
+the repo's own `src/` via `tsx`, with `serialport`, `@stoprocent/noble`, and
 `tsx` added to the **root** `devDependencies`. A tsconfig `paths` alias lets the
 example source read exactly like published-consumer code while resolving to the
 local source with no build step.
@@ -93,7 +93,7 @@ type-checks every example against live `src/`.
 
 ### Root `package.json` additions
 
-- `devDependencies`: `serialport`, `@abandonware/noble`, `tsx`.
+- `devDependencies`: `serialport`, `@stoprocent/noble`, `tsx`.
 - `scripts`:
   - `"example": "tsx"` → usage `npm run example examples/echo-bot.ts /dev/cu.usbmodemXXXX`
   - `"typecheck:examples": "tsc -p examples/tsconfig.json"`
@@ -138,16 +138,17 @@ re-fetch) or subscribe to `syncProgress`.
 
 ### BLE example (`ble-get-contacts.ts`)
 
-The only BLE example, so the `@abandonware/noble` flow is inlined here rather
-than shared:
+The only BLE example, so the `@stoprocent/noble` flow is inlined here rather
+than shared. `@stoprocent/noble` is a maintained, TypeScript-first noble fork,
+so the example is fully typed (no `any`, no ambient shim):
 
-1. `noble.on('stateChange')` → `startScanningAsync([NORDIC_UART.service], false)`.
-2. On peripheral discovered → stop scan, `connectAsync()`.
-3. `discoverSomeServicesAndCharacteristicsAsync([NORDIC_UART.service], [NORDIC_UART.rxWrite, NORDIC_UART.txNotify])`.
+1. `await noble.waitForPoweredOnAsync()`.
+2. `await startScanningAsync([NORDIC_UART.service], false)` → resolve first `discover`.
+3. `connectAsync()` → `discoverSomeServicesAndCharacteristicsAsync([NORDIC_UART.service], [NORDIC_UART.rxWrite, NORDIC_UART.txNotify])`.
 4. `createBleTransport({ write, subscribe, watchState })` per the docs recipe:
    - `write: (bytes) => rxChar.writeAsync(Buffer.from(bytes), true)`
-   - `subscribe: (onBytes) => { txChar.on('data', d => onBytes(new Uint8Array(d))); txChar.subscribe(() => {}); }`
-   - `watchState: (onState) => peripheral.on('disconnect', () => onState('idle'))`
+   - `subscribe: (onBytes) => { txChar.on('data', d => onBytes(new Uint8Array(d))); void txChar.subscribeAsync(); }`
+   - `watchState: (onState) => peripheral.once('disconnect', () => onState('idle'))`
 5. `new MeshCoreSession({ transport })`, `session.start()`, `await session.getContacts()`,
    print owner + contacts, disconnect.
 
@@ -219,5 +220,5 @@ never touches framing or the wire.
 
 - **`examples/README.md`** — the example table, the `npm run example <file> <port>`
   command, how to find a serial port path per OS, and the BLE example's extra
-  `@abandonware/noble` requirement.
+  `@stoprocent/noble` requirement.
 - **Root `README.md`** — a short "Examples" section linking `examples/`.
