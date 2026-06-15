@@ -1398,6 +1398,13 @@ export class MeshCoreSession {
     return repeaterAdmin.repeaterRequestOwnerInfo(this.ctx, contactKey);
   }
 
+  /** Send a generic binary request to a contact and resolve the raw response
+   *  body. `reqData` is [REQ_TYPE byte, ...params]. The ACL/neighbours/owner/
+   *  avg-min-max helpers are thin wrappers over this. */
+  async sendBinaryRequest(contactKey: string, reqData: Buffer, opts: { timeoutMs?: number } = {}): Promise<Buffer> {
+    return repeaterAdmin.sendBinaryReq(this.ctx, contactKey, reqData, opts.timeoutMs);
+  }
+
   /** Send a remote CLI command; the reply is routed back by sender prefix. */
   async repeaterSendCli(contactKey: string, command: string): Promise<string> {
     return repeaterAdmin.repeaterSendCli(this.ctx, contactKey, command);

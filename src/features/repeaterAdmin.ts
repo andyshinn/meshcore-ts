@@ -133,18 +133,46 @@ function lookupRepeaterContact(
   return { ok: true, publicKeyHex: contact.publicKeyHex };
 }
 
-/** Issue an admin write and resolve the next RESP_SENT's tag. Serialises
- *  through `adminSentQueue` so concurrent admin requests don't cross
- *  responses. */
-function writeAdminAndAwaitTag(ctx: FeatureContext, frame: Buffer): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+/** Generic mesh request (ACL / neighbours / owner / avg-min-max, or any custom
+ *  REQ_TYPE). Issues CMD_SEND_BINARY_REQ, parks an awaiter for the matching
+ *  PUSH_BINARY_RESPONSE tag, and returns the response body (which the caller
+ *  decodes per req_type). `reqData` is `[REQ_TYPE byte, ...params]`.
+ *
+ *  Implementation note: `awaitTag` is registered synchronously inside the
+ *  adminSentQueue resolver so that a PUSH_BINARY_RESPONSE arriving in the same
+ *  synchronous turn as RESP_SENT (as happens in tests and under tight firmware
+ *  timing) does not race past the awaiter registration. */
+export function sendBinaryReq(
+  ctx: FeatureContext,
+  contactKey: string,
+  reqData: Buffer,
+  timeoutMs: number = ADMIN_REPLY_TIMEOUT_MS,
+): Promise<Buffer> {
+  const contact = lookupRepeaterContact(ctx, contactKey);
+  if (!contact.ok) return Promise.reject(new Error(contact.error));
+  let frame: Buffer;
+  try {
+    frame = buildSendBinaryReq(contact.publicKeyHex, reqData);
+  } catch (err) {
+    return Promise.reject(err as Error);
+  }
+  return new Promise<Buffer>((resolve, reject) => {
     const queue = ctx.rt.adminCorr.adminSentQueue;
     const timer = setTimeout(() => {
       const i = queue.indexOf(entry);
       if (i !== -1) queue.splice(i, 1);
       reject(new Error(`admin RESP_SENT timed out after ${ADMIN_SENT_TIMEOUT_MS}ms`));
     }, ADMIN_SENT_TIMEOUT_MS);
-    const entry: PendingAdminSent = { resolve, reject, timer };
+    const entry: PendingAdminSent = {
+      resolve: (tagHex) => {
+        // Register the payload awaiter synchronously inside the RESP_SENT
+        // resolver so a PUSH_BINARY_RESPONSE that arrives in the same
+        // synchronous turn (e.g. tight firmware ack) is never missed.
+        ctx.admin.awaitTag<Buffer>(tagHex, timeoutMs).then(resolve, reject);
+      },
+      reject,
+      timer,
+    };
     queue.push(entry);
     ctx.writeFrame(frame).catch((err) => {
       const i = queue.indexOf(entry);
@@ -153,17 +181,6 @@ function writeAdminAndAwaitTag(ctx: FeatureContext, frame: Buffer): Promise<stri
       reject(err);
     });
   });
-}
-
-/** Generic mesh request (ACL / neighbours / owner). Issues CMD_SEND_BINARY_REQ,
- *  parks an awaiter for the matching PUSH_BINARY_RESPONSE tag, returns the
- *  body (which the caller decodes per req_type). */
-async function sendBinaryReq(ctx: FeatureContext, contactKey: string, reqData: Buffer): Promise<Buffer> {
-  const contact = lookupRepeaterContact(ctx, contactKey);
-  if (!contact.ok) throw new Error(contact.error);
-  const frame = buildSendBinaryReq(contact.publicKeyHex, reqData);
-  const tagHex = await writeAdminAndAwaitTag(ctx, frame);
-  return ctx.admin.awaitTag<Buffer>(tagHex, ADMIN_REPLY_TIMEOUT_MS);
 }
 
 // ---- Public methods ----------------------------------------------------

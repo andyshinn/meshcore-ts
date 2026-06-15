@@ -15,6 +15,7 @@ import {
   repeaterLogin,
   repeaterSendCli,
   resetAdmin,
+  sendBinaryReq,
 } from '../../src/features/repeaterAdmin';
 import { MeshObservations } from '../../src/meshObservations';
 import { PendingChannelSends } from '../../src/pendingChannelSends';
@@ -228,6 +229,39 @@ describe('repeaterAdmin: CLI command + onCliReply correlation', () => {
     directMessagesFeature.handle(0x06, sent, ctx);
     expect(resolvedTag).toBe('deadbeef');
     expect(ctx.rt.adminCorr.adminSentQueue).toHaveLength(0);
+  });
+});
+
+describe('repeaterAdmin: sendBinaryReq (generic)', () => {
+  it('writes CMD_SEND_BINARY_REQ and resolves the tagged response body', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const reqData = Buffer.from([0x05, 0x00, 0x00]); // arbitrary REQ_TYPE + params
+    const p = sendBinaryReq(ctx, `c:${PK}`, reqData);
+
+    // CMD_SEND_BINARY_REQ = [0x32][32B pubkey][reqData]
+    expect(writes).toHaveLength(1);
+    expect(writes[0][0]).toBe(0x32);
+    expect(writes[0].subarray(1, 33).toString('hex')).toBe(PK);
+    expect(writes[0].subarray(33).toString('hex')).toBe('050000');
+
+    // RESP_SENT echoes the tag; the admin hook claims it ahead of the DM FIFO.
+    const sent = Buffer.alloc(10);
+    sent[0] = 0x06;
+    Buffer.from('cafebabe', 'hex').copy(sent, 2);
+    directMessagesFeature.handle(0x06, sent, ctx);
+
+    // PUSH_BINARY_RESPONSE = [0x8c][reserved][tag u32][body...]
+    const resp = Buffer.alloc(6 + 2);
+    resp[0] = PUSH.BINARY_RESPONSE;
+    Buffer.from('cafebabe', 'hex').copy(resp, 2);
+    resp[6] = 0xab;
+    resp[7] = 0xcd;
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, resp, ctx);
+
+    await expect(p.then((b) => b.toString('hex'))).resolves.toBe('abcd');
   });
 });
 
