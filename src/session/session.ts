@@ -527,6 +527,10 @@ export class MeshCoreSession {
         }
       }
       this.pendingTyped.clear();
+      // Resolve any in-flight contact-stream waiters (getContacts / handshake) so
+      // they return promptly on disconnect instead of riding out the watchdog.
+      this.resolveWaiter('contactsStartWaiter');
+      this.resolveWaiter('contactsDoneWaiter');
     }
   };
 
@@ -973,7 +977,8 @@ export class MeshCoreSession {
   }
 
   /** Actively re-query the radio's self-info (APP_START → RESP_SELF_INFO),
-   *  publish it as the Owner, and return it. */
+   *  publish it as the Owner, and return it. Intended for use while connected;
+   *  on a dead link it resolves only after the watchdog/request timeout. */
   async getSelfInfo(): Promise<SelfInfo> {
     return this.withSyncLock(async () => {
       const frame = await this.request(encodeAppStart(this.appName, this.appVersion), { expect: RESP.SELF_INFO });
@@ -984,7 +989,8 @@ export class MeshCoreSession {
   }
 
   /** Actively re-enumerate the radio's contact store (GET_CONTACTS) and resolve
-   *  the fresh list. Reuses the handshake's contact-stream waiters. */
+   *  the fresh list. Reuses the handshake's contact-stream waiters. Intended for
+   *  use while connected; on a dead link it resolves only after the watchdog/request timeout. */
   async getContacts(): Promise<Contact[]> {
     return this.withSyncLock(async () => {
       const start = this.armWaiter('contactsStartWaiter', CONTACTS_START_WAIT_MS);
@@ -997,7 +1003,8 @@ export class MeshCoreSession {
   }
 
   /** Actively re-enumerate channel slots (GET_CHANNEL 0..N-1) and resolve the
-   *  fresh list. */
+   *  fresh list. Intended for use while connected; on a dead link it resolves
+   *  only after the watchdog/request timeout. */
   async getChannels(): Promise<Channel[]> {
     return this.withSyncLock(async () => {
       for (let i = 0; i < CHANNEL_SLOT_COUNT; i += 1) {
@@ -1007,7 +1014,8 @@ export class MeshCoreSession {
     });
   }
 
-  /** Actively re-query a single channel slot. */
+  /** Actively re-query a single channel slot. Intended for use while connected;
+   *  on a dead link it resolves only after the watchdog/request timeout. */
   async getChannel(idx: number): Promise<Channel | null> {
     return this.withSyncLock(() => channels.getChannel(this.ctx, idx));
   }
