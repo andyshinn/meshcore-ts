@@ -1,6 +1,17 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { decodeChannelInfo, deriveChannelSecret, encodeGetChannel, encodeSetChannel } from '../../src/features/channels';
+import type { FeatureContext } from '../../src/feature';
+import {
+  createChannelsRuntime,
+  decodeChannelInfo,
+  deriveChannelSecret,
+  encodeGetChannel,
+  encodeSetChannel,
+  getChannel,
+} from '../../src/features/channels';
+import { MeshCoreEvents } from '../../src/ports/events';
+import { noopLogger } from '../../src/ports/logger';
+import { SessionState } from '../../src/state/model';
 
 const hex = (b: Buffer) => b.toString('hex');
 
@@ -63,5 +74,44 @@ describe('channels: decodeChannelInfo', () => {
 
   it('returns null below the 50-byte frame length', () => {
     expect(decodeChannelInfo(Buffer.alloc(49))).toBeNull();
+  });
+});
+
+function channelInfoFrame(idx: number, name: string, keyHex: string): Buffer {
+  const f = Buffer.alloc(50);
+  f[0] = 0x12; // RESP_CHANNEL_INFO
+  f[1] = idx;
+  Buffer.from(name, 'utf8').copy(f, 2);
+  Buffer.from(keyHex, 'hex').copy(f, 34);
+  return f;
+}
+
+describe('channels: getChannel', () => {
+  it('resolves the decoded Channel and updates state when a slot is present', async () => {
+    const frame = channelInfoFrame(2, 'Public', 'ab'.repeat(16));
+    const events = new MeshCoreEvents();
+    const state = new SessionState();
+    const ctx = {
+      requestOrNull: async () => frame,
+      events,
+      state,
+      log: noopLogger,
+      rt: { channels: createChannelsRuntime() },
+    } as unknown as FeatureContext;
+
+    const ch = await getChannel(ctx, 2);
+    expect(ch).toMatchObject({ key: 'ch:Public', name: 'Public', kind: 'public', idx: 2 });
+    expect(state.getChannels()).toHaveLength(1);
+  });
+
+  it('resolves null for an empty slot (requestOrNull → null)', async () => {
+    const ctx = {
+      requestOrNull: async () => null,
+      events: new MeshCoreEvents(),
+      state: new SessionState(),
+      log: noopLogger,
+      rt: { channels: createChannelsRuntime() },
+    } as unknown as FeatureContext;
+    expect(await getChannel(ctx, 5)).toBeNull();
   });
 });
