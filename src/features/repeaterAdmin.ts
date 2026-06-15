@@ -154,7 +154,7 @@ export function sendBinaryReq(
   try {
     frame = buildSendBinaryReq(contact.publicKeyHex, reqData);
   } catch (err) {
-    return Promise.reject(err as Error);
+    return Promise.reject(err);
   }
   return new Promise<Buffer>((resolve, reject) => {
     const queue = ctx.rt.adminCorr.adminSentQueue;

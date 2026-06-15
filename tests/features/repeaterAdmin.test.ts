@@ -310,4 +310,15 @@ describe('repeaterAdmin: resetAdmin', () => {
     expect(ctx.rt.adminCorr.pendingLocalStats).toBeNull();
     await expect(seen).resolves.toBe('stopped');
   });
+
+  it('rejects an in-flight sendBinaryReq awaiter', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    const p = sendBinaryReq(ctx, `c:${PK}`, Buffer.from([0x05, 0, 0]));
+    // entry is parked on adminSentQueue
+    expect(ctx.rt.adminCorr.adminSentQueue.length).toBeGreaterThan(0);
+    resetAdmin(ctx, 'disconnected');
+    await expect(p).rejects.toThrow('disconnected');
+  });
 });
