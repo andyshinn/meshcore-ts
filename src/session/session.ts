@@ -37,7 +37,7 @@ import { encodeSetPathHashMode, pathHashSizeToMode } from '../features/pathHash'
 import { encodeSetRadioParams, encodeSetRadioTxPower } from '../features/radioParams';
 import * as rawData from '../features/rawData';
 import * as repeaterAdmin from '../features/repeaterAdmin';
-import { applySelfInfo, encodeAppStart, selfInfoFeature, type SelfInfo } from '../features/selfInfo';
+import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '../features/selfInfo';
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
