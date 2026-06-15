@@ -47,7 +47,7 @@ import { MeshCoreEvents } from '../ports/events';
 import { type Logger, noopLogger } from '../ports/logger';
 import type { Transport } from '../ports/transport';
 import { FeatureRegistry } from '../registry';
-import type { AclEntry, LocalStats, LoginSuccess, NeighboursPage, OwnerInfo, TraceData } from '../repeater';
+import type { AclEntry, AvgMinMaxResult, LocalStats, LoginSuccess, NeighboursPage, OwnerInfo, TraceData } from '../repeater';
 import { SessionState } from '../state/model';
 import type { Channel, ContactKind, RawPacket, SyncProgress, TransportState } from '../types';
 import { DEFAULT_SYNC_PROGRESS } from '../types';
@@ -1403,6 +1403,14 @@ export class MeshCoreSession {
    *  avg-min-max helpers are thin wrappers over this. */
   async sendBinaryRequest(contactKey: string, reqData: Buffer, opts: { timeoutMs?: number } = {}): Promise<Buffer> {
     return repeaterAdmin.sendBinaryReq(this.ctx, contactKey, reqData, opts.timeoutMs);
+  }
+
+  /** Request a min/max/avg series window from a sensor contact. */
+  async repeaterRequestAvgMinMax(
+    contactKey: string,
+    opts: { startSecsAgo: number; endSecsAgo: number },
+  ): Promise<AvgMinMaxResult> {
+    return repeaterAdmin.repeaterRequestAvgMinMax(this.ctx, contactKey, opts);
   }
 
   /** Send a remote CLI command; the reply is routed back by sender prefix. */

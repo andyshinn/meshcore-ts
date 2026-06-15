@@ -3,6 +3,7 @@ import { PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
 import {
   type AclEntry,
+  type AvgMinMaxResult,
   buildAnonLogin,
   buildGetStats,
   buildLogout,
@@ -16,6 +17,7 @@ import {
   type NeighboursPage,
   type OwnerInfo,
   parseAclList,
+  parseAvgMinMax,
   parseBinaryResponse,
   parseLocalStats,
   parseLoginFail,
@@ -309,6 +311,25 @@ export async function repeaterRequestOwnerInfo(ctx: FeatureContext, contactKey: 
   const reqData = Buffer.from([REQ_TYPE.GET_OWNER_INFO]);
   const payload = await sendBinaryReq(ctx, contactKey, reqData);
   return parseOwnerInfo(payload);
+}
+
+/** Request a min/max/avg series window from a sensor (REQ_TYPE_GET_AVG_MIN_MAX).
+ *  `startSecsAgo`/`endSecsAgo` are the window bounds relative to the repeater's
+ *  clock (end is usually 0 = now). Requires read-only ACL perms on the device. */
+export async function repeaterRequestAvgMinMax(
+  ctx: FeatureContext,
+  contactKey: string,
+  opts: { startSecsAgo: number; endSecsAgo: number },
+): Promise<AvgMinMaxResult> {
+  const reqData = Buffer.alloc(11);
+  reqData[0] = REQ_TYPE.GET_AVG_MIN_MAX;
+  reqData.writeUInt32LE(opts.startSecsAgo >>> 0, 1);
+  reqData.writeUInt32LE(opts.endSecsAgo >>> 0, 5);
+  // bytes 9,10 reserved = 0 (firmware returns no data unless both are zero)
+  const payload = await sendBinaryReq(ctx, contactKey, reqData);
+  const parsed = parseAvgMinMax(payload);
+  if (!parsed) throw new Error('failed to parse avg/min/max response');
+  return parsed;
 }
 
 /** Send a remote CLI command (e.g. "setperm <hex> 1", "discover.neighbors")

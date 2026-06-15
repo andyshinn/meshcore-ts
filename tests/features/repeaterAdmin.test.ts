@@ -13,6 +13,7 @@ import {
   registerAdminHooks,
   repeaterAdminFeature,
   repeaterLogin,
+  repeaterRequestAvgMinMax,
   repeaterSendCli,
   resetAdmin,
   sendBinaryReq,
@@ -320,5 +321,47 @@ describe('repeaterAdmin: resetAdmin', () => {
     expect(ctx.rt.adminCorr.adminSentQueue.length).toBeGreaterThan(0);
     resetAdmin(ctx, 'disconnected');
     await expect(p).rejects.toThrow('disconnected');
+  });
+});
+
+describe('repeaterAdmin: repeaterRequestAvgMinMax', () => {
+  it('builds the 11-byte request and parses the response', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterRequestAvgMinMax(ctx, `c:${PK}`, { startSecsAgo: 3600, endSecsAgo: 0 });
+
+    // reqData = [0x04][start u32 LE][end u32 LE][0][0]; framed as CMD_SEND_BINARY_REQ.
+    const reqData = writes[0].subarray(33);
+    expect(reqData).toHaveLength(11);
+    expect(reqData[0]).toBe(0x04);
+    expect(reqData.readUInt32LE(1)).toBe(3600);
+    expect(reqData.readUInt32LE(5)).toBe(0);
+    expect(reqData[9]).toBe(0);
+    expect(reqData[10]).toBe(0);
+
+    // Tag echo, then a tagged response: now=42 + one temperature entry.
+    const sent = Buffer.alloc(10);
+    sent[0] = 0x06;
+    Buffer.from('11223344', 'hex').copy(sent, 2);
+    directMessagesFeature.handle(0x06, sent, ctx);
+
+    const respBody = Buffer.alloc(4 + 2 + 6);
+    respBody.writeUInt32LE(42, 0);
+    respBody[4] = 1;
+    respBody[5] = 0x67;
+    respBody.writeInt16BE(200, 6);
+    respBody.writeInt16BE(255, 8);
+    respBody.writeInt16BE(225, 10);
+    const resp = Buffer.alloc(6 + respBody.length);
+    resp[0] = PUSH.BINARY_RESPONSE;
+    Buffer.from('11223344', 'hex').copy(resp, 2);
+    respBody.copy(resp, 6);
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, resp, ctx);
+
+    const res = await p;
+    expect(res.nowUnix).toBe(42);
+    expect(res.series[0]).toMatchObject({ channel: 1, name: 'Temperature', min: 20, max: 25.5, avg: 22.5 });
   });
 });
