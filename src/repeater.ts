@@ -609,3 +609,132 @@ function decodeCayenneLPP(b: Buffer): TelemetryField[] {
   }
   return out;
 }
+
+// ---- Avg/Min/Max series (REQ_TYPE_GET_AVG_MIN_MAX) ---------------------
+// The series response packs each min/max/avg with size/scale/sign drawn from
+// the firmware's getDataSize/getMultiplier/isSigned (NOT the standard CayenneLPP
+// decode path — notably Current is UNSIGNED here). Mirrors
+// MeshCore/examples/simple_sensor/SensorMesh.cpp:76-148.
+
+function avgMinMaxSize(type: number): number {
+  switch (type) {
+    case 136:
+      return 9; // GPS
+    case 240:
+      return 8; // POLYLINE
+    case 134:
+    case 113:
+      return 6; // GYROMETER, ACCELEROMETER
+    case 100:
+    case 118:
+    case 130:
+    case 131:
+    case 133:
+      return 4; // GENERIC, FREQ, DIST, ENERGY, UNIXTIME
+    case 135:
+      return 3; // COLOUR
+    case 2:
+    case 3:
+    case 101:
+    case 103:
+    case 125:
+    case 115:
+    case 104:
+    case 121:
+    case 116:
+    case 117:
+    case 132:
+    case 128:
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function avgMinMaxMultiplier(type: number): number {
+  switch (type) {
+    case 117:
+    case 130:
+    case 131:
+      return 1000; // CURRENT, DISTANCE, ENERGY
+    case 116:
+    case 2:
+    case 3:
+      return 100; // VOLTAGE, ANALOG_IN/OUT
+    case 103:
+    case 115:
+    case 104:
+      return 10; // TEMPERATURE, BAROMETRIC, HUMIDITY
+    default:
+      return 1;
+  }
+}
+
+function avgMinMaxSigned(type: number): boolean {
+  // ALTITUDE, TEMPERATURE, GYROMETER, ANALOG_IN/OUT, GPS, ACCELEROMETER
+  return type === 121 || type === 103 || type === 134 || type === 2 || type === 3 || type === 136 || type === 113;
+}
+
+// Big-endian integer / multiplier, two's-complement when signed. Number math
+// (not bitwise) so signedness is correct for multi-byte sizes.
+function decodeSeriesFloat(buf: Buffer, size: number, multiplier: number, signed: boolean): number {
+  let value = 0;
+  for (let i = 0; i < size; i += 1) value = value * 256 + buf[i];
+  if (signed) {
+    const max = 2 ** (size * 8);
+    if (value >= max / 2) value -= max;
+  }
+  return value / multiplier;
+}
+
+export interface AvgMinMaxSeries {
+  channel: number;
+  lppType: number;
+  typeHex: string;
+  name: string;
+  unit?: string;
+  min: number;
+  max: number;
+  avg: number;
+}
+
+export interface AvgMinMaxResult {
+  /** Repeater's RTC time (unix seconds) at the moment it built the response. */
+  nowUnix: number;
+  series: AvgMinMaxSeries[];
+}
+
+// `body` is the PUSH_BINARY_RESPONSE payload (tag already stripped):
+//   [now u32 LE] then N × [channel u8][lpp_type u8][min][max][avg].
+export function parseAvgMinMax(body: Buffer): AvgMinMaxResult | null {
+  if (body.length < 4) return null;
+  const nowUnix = body.readUInt32LE(0);
+  const series: AvgMinMaxSeries[] = [];
+  let i = 4;
+  while (i + 2 <= body.length) {
+    const channel = body[i];
+    const lppType = body[i + 1];
+    const size = avgMinMaxSize(lppType); // unknown types default to 1 (firmware fallback)
+    const entryLen = 2 + size * 3;
+    if (i + entryLen > body.length) break; // truncated final entry — stop in frame
+    const mult = avgMinMaxMultiplier(lppType);
+    const signed = avgMinMaxSigned(lppType);
+    const base = i + 2;
+    const min = decodeSeriesFloat(body.subarray(base, base + size), size, mult, signed);
+    const max = decodeSeriesFloat(body.subarray(base + size, base + 2 * size), size, mult, signed);
+    const avg = decodeSeriesFloat(body.subarray(base + 2 * size, base + 3 * size), size, mult, signed);
+    const desc = CAYENNE_TYPES[lppType];
+    series.push({
+      channel,
+      lppType,
+      typeHex: `0x${lppType.toString(16).padStart(2, '0')}`,
+      name: desc?.name ?? 'Unknown',
+      unit: desc?.unit,
+      min,
+      max,
+      avg,
+    });
+    i += entryLen;
+  }
+  return { nowUnix, series };
+}

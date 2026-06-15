@@ -10,6 +10,7 @@ import {
   buildSendStatusReq,
   buildSendTelemetryReq,
   buildSendTracePath,
+  parseAvgMinMax,
   parseStatusResponse,
   parseTelemetryResponse,
 } from '../src/repeater';
@@ -139,5 +140,49 @@ describe('repeater decoders: parseTelemetryResponse (CayenneLPP)', () => {
     const payload = Buffer.from([0x06, 0x87, 0xff, 0x80, 0x00]);
     const res = parseTelemetryResponse(telemetryFrame(payload));
     expect(res?.fields[0]).toMatchObject({ name: 'Colour', value: '255,128,0' });
+  });
+});
+
+describe('parseAvgMinMax', () => {
+  it('parses now + a signed Temperature series (size 2, /10)', () => {
+    const body = Buffer.alloc(4 + 2 + 6);
+    body.writeUInt32LE(1000, 0); // now
+    body[4] = 1; // channel
+    body[5] = 0x67; // LPP_TEMPERATURE
+    body.writeInt16BE(200, 6); // min 20.0
+    body.writeInt16BE(255, 8); // max 25.5
+    body.writeInt16BE(225, 10); // avg 22.5
+    const res = parseAvgMinMax(body)!;
+    expect(res.nowUnix).toBe(1000);
+    expect(res.series).toEqual([
+      { channel: 1, lppType: 0x67, typeHex: '0x67', name: 'Temperature', unit: '°C', min: 20, max: 25.5, avg: 22.5 },
+    ]);
+  });
+
+  it('treats Current (0x75) as UNSIGNED per the firmware series table', () => {
+    const body = Buffer.alloc(4 + 2 + 6);
+    body.writeUInt32LE(0, 0);
+    body[4] = 2;
+    body[5] = 0x75; // LPP_CURRENT, size 2, /1000, UNSIGNED here
+    body.writeUInt16BE(0xffff, 6); // min
+    body.writeUInt16BE(0xffff, 8); // max
+    body.writeUInt16BE(0xffff, 10); // avg
+    const res = parseAvgMinMax(body)!;
+    // 65535 / 1000 = 65.535 (NOT negative)
+    expect(res.series[0]).toMatchObject({ lppType: 0x75, name: 'Current', unit: 'A', min: 65.535 });
+  });
+
+  it('returns null on a body too short for "now"', () => {
+    expect(parseAvgMinMax(Buffer.from([0x00, 0x01]))).toBeNull();
+  });
+
+  it('stops cleanly on a truncated final entry', () => {
+    const body = Buffer.alloc(4 + 2 + 2); // declares a temp entry but only 2 of 6 value bytes
+    body.writeUInt32LE(5, 0);
+    body[4] = 1;
+    body[5] = 0x67;
+    const res = parseAvgMinMax(body)!;
+    expect(res.nowUnix).toBe(5);
+    expect(res.series).toEqual([]);
   });
 });
