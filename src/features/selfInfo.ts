@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { CMD, RESP } from '../codes';
-import type { Feature } from '../feature';
+import type { Feature, FeatureContext } from '../feature';
 import type { Owner } from '../types';
 
 // RESP_SELF_INFO [0x05][adv_type u8][tx_power u8][max_tx_power u8]
@@ -39,21 +39,30 @@ export function decodeSelfInfo(frame: Buffer): SelfInfo | null {
   return { name, publicKeyHex };
 }
 
+/** Decode RESP_SELF_INFO, publish the radio identity as the app Owner, and
+ *  return the parsed SelfInfo. Shared by the feature handler and the on-demand
+ *  getSelfInfo() getter (which consumes the frame via the typed-reply path, so
+ *  it must invoke this explicitly). */
+export function applySelfInfo(ctx: FeatureContext, frame: Buffer): SelfInfo | null {
+  const parsed = decodeSelfInfo(frame);
+  if (!parsed) return null;
+  const owner: Owner = {
+    name: parsed.name,
+    publicKeyHex: parsed.publicKeyHex,
+    // Codebase convention for pubkey prefixes is the first 12 hex chars
+    // (6 bytes); the identity card shows fewer but stores the full key.
+    publicKeyShort: parsed.publicKeyHex.slice(0, 12),
+  };
+  ctx.state.setOwner(owner);
+  ctx.events.emit('owner', owner);
+  ctx.log.debug(`self-info: "${owner.name}" (${owner.publicKeyShort})`);
+  return parsed;
+}
+
 // RESP handler: surface the radio's identity as the app Owner.
 export const selfInfoFeature: Feature = {
   handles: [RESP.SELF_INFO],
   handle: (_code, frame, ctx) => {
-    const parsed = decodeSelfInfo(frame);
-    if (!parsed) return;
-    const owner: Owner = {
-      name: parsed.name,
-      publicKeyHex: parsed.publicKeyHex,
-      // Codebase convention for pubkey prefixes is the first 12 hex chars
-      // (6 bytes); the identity card shows fewer but stores the full key.
-      publicKeyShort: parsed.publicKeyHex.slice(0, 12),
-    };
-    ctx.state.setOwner(owner);
-    ctx.events.emit('owner', owner);
-    ctx.log.debug(`self-info: "${owner.name}" (${owner.publicKeyShort})`);
+    applySelfInfo(ctx, frame);
   },
 };

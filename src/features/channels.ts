@@ -184,39 +184,49 @@ export async function setChannel(ctx: FeatureContext, idx: number, name: string,
 
 // ---- Inbound feature ---------------------------------------------------
 
+/** Decode RESP_CHANNEL_INFO, update the idx→Channel map, device-presence set,
+ *  and persisted channel state, emitting the relevant events. Returns the
+ *  decoded Channel, or null for an empty/unparseable slot. Shared by the feature
+ *  handler and the on-demand getChannel() getter (typed-reply path bypasses the
+ *  handler, so the getter calls this explicitly). */
+export function applyChannelInfo(ctx: FeatureContext, frame: Buffer): Channel | null {
+  const info = decodeChannelInfo(frame);
+  if (!info) return null;
+  if (info.empty) {
+    // Slot was previously populated but is now empty (e.g. just deleted).
+    // Drop it from devicePresence and from the channelByIdx dispatch map so
+    // a future re-enumeration starts clean.
+    const existing = ctx.rt.channels.channelByIdx.get(info.idx);
+    if (existing) {
+      ctx.rt.channels.channelByIdx.delete(info.idx);
+      ctx.rt.channels.devicePresence.delete(existing.key);
+      ctx.events.emit('channelPresence', [...ctx.rt.channels.devicePresence]);
+    }
+    return null;
+  }
+
+  const key = `ch:${info.name}`;
+  const channel: Channel = {
+    key,
+    name: info.name,
+    kind: info.name.startsWith('#') ? 'hashtag' : info.name === 'Public' ? 'public' : 'private',
+    secretHex: info.secretHex,
+    idx: info.idx,
+  };
+
+  ctx.rt.channels.channelByIdx.set(info.idx, channel);
+  ctx.rt.channels.devicePresence.add(key);
+  ctx.events.emit('channelPresence', [...ctx.rt.channels.devicePresence]);
+
+  ctx.state.upsertChannel(channel);
+  ctx.events.emit('channels', ctx.state.getChannels());
+  ctx.log.debug(`channel idx=${info.idx} "${info.name}"`);
+  return channel;
+}
+
 export const channelsFeature: Feature = {
   handles: [RESP.CHANNEL_INFO],
   handle: (_code, frame, ctx) => {
-    const info = decodeChannelInfo(frame);
-    if (!info) return;
-    if (info.empty) {
-      // Slot was previously populated but is now empty (e.g. just deleted).
-      // Drop it from devicePresence and from the channelByIdx dispatch map so
-      // a future re-enumeration starts clean.
-      const existing = ctx.rt.channels.channelByIdx.get(info.idx);
-      if (existing) {
-        ctx.rt.channels.channelByIdx.delete(info.idx);
-        ctx.rt.channels.devicePresence.delete(existing.key);
-        ctx.events.emit('channelPresence', [...ctx.rt.channels.devicePresence]);
-      }
-      return;
-    }
-
-    const key = `ch:${info.name}`;
-    const channel: Channel = {
-      key,
-      name: info.name,
-      kind: info.name.startsWith('#') ? 'hashtag' : info.name === 'Public' ? 'public' : 'private',
-      secretHex: info.secretHex,
-      idx: info.idx,
-    };
-
-    ctx.rt.channels.channelByIdx.set(info.idx, channel);
-    ctx.rt.channels.devicePresence.add(key);
-    ctx.events.emit('channelPresence', [...ctx.rt.channels.devicePresence]);
-
-    ctx.state.upsertChannel(channel);
-    ctx.events.emit('channels', ctx.state.getChannels());
-    ctx.log.debug(`channel idx=${info.idx} "${info.name}"`);
+    applyChannelInfo(ctx, frame);
   },
 };
