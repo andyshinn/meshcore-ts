@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createBleTransport, NORDIC_UART } from '../../src/transports/bleTransport';
+import { BleTransport, createBleTransport, NORDIC_UART } from '../../src/transports/bleTransport';
 import type { TransportState } from '../../src/types';
 
 describe('NORDIC_UART', () => {
@@ -51,6 +51,42 @@ describe('createBleTransport', () => {
     const states: string[] = [];
     t.onStateChange((s) => states.push(s));
     push?.('idle');
+    expect(states).toEqual(['idle']);
+    expect(t.getState()).toBe('idle');
+  });
+});
+
+// Subclass that records writes and exposes the protected hooks for the test.
+class FakeBleTransport extends BleTransport {
+  writes: number[][] = [];
+  protected writeChunk(bytes: Uint8Array): void {
+    this.writes.push([...bytes]);
+  }
+  // expose protected helpers to the test
+  feed(frame: Uint8Array): void {
+    this.deliver(frame);
+  }
+  flip(s: TransportState): void {
+    this.setState(s);
+  }
+}
+
+describe('BleTransport (abstract base)', () => {
+  it('routes deliver() to onData and writeChunk() from send()', async () => {
+    const t = new FakeBleTransport();
+    const frames: number[][] = [];
+    t.onData((f) => frames.push([...f]));
+    t.feed(Uint8Array.from([7, 8]));
+    await t.send(Uint8Array.from([0x01]));
+    expect(frames).toEqual([[7, 8]]);
+    expect(t.writes).toEqual([[0x01]]);
+  });
+
+  it('routes setState() to onStateChange and getState()', () => {
+    const t = new FakeBleTransport();
+    const states: string[] = [];
+    t.onStateChange((s) => states.push(s));
+    t.flip('idle');
     expect(states).toEqual(['idle']);
     expect(t.getState()).toBe('idle');
   });
