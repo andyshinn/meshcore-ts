@@ -6,6 +6,11 @@ import starlightTypeDoc, { typeDocSidebarGroup } from 'starlight-typedoc';
 export default defineConfig({
   site: 'https://andyshinn.github.io',
   base: '/meshcore-ts',
+  // Always emit/serve trailing-slash directory URLs so relative internal links
+  // (e.g. ../transports/) resolve correctly under the base path in dev,
+  // preview, and on GitHub Pages — without it, the dev homepage URL lacks the
+  // trailing slash and relative links drop the /meshcore-ts base.
+  trailingSlash: 'always',
   integrations: [
     starlight({
       title: 'meshcore-ts',
