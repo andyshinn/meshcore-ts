@@ -23,8 +23,7 @@ export default defineConfig({
           entryPoints: ['../src/index.ts'],
           tsconfig: '../tsconfig.json',
           typeDoc: {
-            // Keep the generated reference readable for a public API surface.
-            skipErrorChecking: true,
+            // Formatting: code blocks for signatures, tables for parameters.
             useCodeBlocks: true,
             parametersFormat: 'table',
           },
