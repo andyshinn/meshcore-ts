@@ -984,6 +984,7 @@ export class MeshCoreSession {
   /** Find a contact whose public key starts with the given hex prefix
    *  (case-insensitive), or null. */
   findContactByPublicKeyPrefix(prefixHex: string): Contact | null {
+    if (!prefixHex) return null;
     const p = prefixHex.toLowerCase();
     return this.state.getContacts().find((c) => c.publicKeyHex.toLowerCase().startsWith(p)) ?? null;
   }
@@ -993,7 +994,8 @@ export class MeshCoreSession {
     return this.state.getChannels().find((c) => c.name === name) ?? null;
   }
 
-  /** Find a channel by its 16-byte secret (hex, case-insensitive), or null. */
+  /** Find a channel by its secret (hex, case-insensitive exact match). A
+   *  mismatched-length input simply returns null (no validation). */
   findChannelBySecret(secretHex: string): Channel | null {
     const s = secretHex.toLowerCase();
     return this.state.getChannels().find((c) => (c.secretHex ?? '').toLowerCase() === s) ?? null;

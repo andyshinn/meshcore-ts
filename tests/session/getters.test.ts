@@ -234,5 +234,7 @@ describe('session: find helpers', () => {
     expect(session.findContactByName('Bob')?.publicKeyHex).toBe('ee'.repeat(32));
     expect(session.findContactByPublicKeyPrefix('EEEE')?.name).toBe('Bob');
     expect(session.findContactByPublicKeyPrefix('ffff')).toBeNull();
+    expect(session.findContactByName('Nobody')).toBeNull();
+    expect(session.findContactByPublicKeyPrefix('')).toBeNull();
   });
 });
