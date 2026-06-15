@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@andyshinn/meshcore-ts": ["../src/index"],
+      "@andyshinn/meshcore-ts/transports": ["../src/transports/index"]
+    }
+  },
+  "include": ["./**/*.ts", "../src"]
+}
