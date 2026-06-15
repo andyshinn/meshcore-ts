@@ -76,3 +76,67 @@ const session = new MeshCoreSession({ transport, logger: console });
 
 See the [events and state model](../events-and-state/) next, or the
 [full API reference](../../api/readme/).
+
+## Built-in transport adapters
+
+The `@andyshinn/meshcore-ts/transports` subpath ships ready-made adapters so you
+don't have to write the boilerplate above for the two most common hardware
+transports.
+
+## Serial (node-serialport)
+
+```ts
+import { SerialPort } from 'serialport';
+import { MeshCoreSession } from '@andyshinn/meshcore-ts';
+import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+
+const port = new SerialPort({ path: '/dev/ttyUSB0', baudRate: 115200 });
+const session = new MeshCoreSession({ transport: new SerialTransport(port) });
+session.start(); // SerialTransport observes open/close/error; it does not open the port
+```
+
+`SerialTransport` frames the MeshCore serial protocol for you. You own opening
+and closing the port.
+
+## BLE (noble)
+
+```ts
+import noble from '@abandonware/noble';
+import { MeshCoreSession } from '@andyshinn/meshcore-ts';
+import { createBleTransport, NORDIC_UART } from '@andyshinn/meshcore-ts/transports';
+
+// After you have connected `peripheral` and discovered `rxChar`/`txChar`
+// for NORDIC_UART.rxWrite / NORDIC_UART.txNotify:
+const transport = createBleTransport({
+  write: (bytes) => rxChar.writeAsync(Buffer.from(bytes), true),
+  subscribe: (onBytes) => {
+    txChar.on('data', (data: Buffer) => onBytes(new Uint8Array(data)));
+    txChar.subscribe(() => {});
+  },
+  watchState: (onState) => peripheral.on('disconnect', () => onState('idle')),
+});
+const session = new MeshCoreSession({ transport });
+session.start();
+```
+
+## BLE (React Native — react-native-ble-plx)
+
+`react-native-ble-plx` deals in base64 strings, so decode/encode in your hooks:
+
+```ts
+import { Buffer } from 'buffer';
+import { createBleTransport } from '@andyshinn/meshcore-ts/transports';
+
+const transport = createBleTransport({
+  write: (bytes) =>
+    device.writeCharacteristicWithResponseForService(
+      service, rxUuid, Buffer.from(bytes).toString('base64'),
+    ).then(() => {}),
+  subscribe: (onBytes) =>
+    device.monitorCharacteristicForService(service, txUuid, (_err, ch) => {
+      if (ch?.value) onBytes(new Uint8Array(Buffer.from(ch.value, 'base64')));
+    }),
+  watchState: (onState) =>
+    device.onDisconnected(() => onState('idle')),
+});
+```
