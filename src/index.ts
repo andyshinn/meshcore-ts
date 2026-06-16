@@ -35,6 +35,7 @@ export * from './features/tuning';
 export * from './frame';
 export * from './meshObservations';
 export * from './meshPacket';
+export * from './onAirPackets';
 export * from './paths';
 export * from './pendingChannelSends';
 export * from './ports/events';
