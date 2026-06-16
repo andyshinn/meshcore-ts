@@ -101,7 +101,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error('BLE example failed:', err);
-  process.exit(1);
-});
+// noble keeps the BLE adapter / HCI socket open, so the event loop never drains
+// on its own — exit explicitly once the one-shot report is done.
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('BLE example failed:', err);
+    process.exit(1);
+  });
