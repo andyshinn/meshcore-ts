@@ -138,6 +138,30 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
         snr: snrFromPathHex(header.pathHex),
       };
     }
+    case PAYLOAD_TYPE.CONTROL: {
+      if (payload.length < 1) break;
+      const rawFlags = payload[0];
+      const subType = rawFlags & 0xf0;
+      if (subType === 0x80 && payload.length >= 6) {
+        return {
+          kind: 'controlDiscoverReq',
+          prefixOnly: (rawFlags & 0x01) !== 0,
+          typeFilter: payload[1],
+          tag: payload.readUInt32LE(2),
+          since: payload.length >= 10 ? payload.readUInt32LE(6) : 0,
+        };
+      }
+      if (subType === 0x90 && payload.length >= 6) {
+        return {
+          kind: 'controlDiscoverResp',
+          nodeType: rawFlags & 0x0f,
+          snr: payload.readInt8(1) / 4,
+          tag: payload.readUInt32LE(2),
+          publicKeyHex: payload.subarray(6).toString('hex'),
+        };
+      }
+      return { kind: 'controlOther', rawFlags, payloadHex: payload.toString('hex') };
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
