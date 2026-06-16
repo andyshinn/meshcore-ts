@@ -62,6 +62,25 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
       if (advert) return { kind: 'advert', advert };
       break;
     }
+    case PAYLOAD_TYPE.TXT_MSG: {
+      if (payload.length < 4) break;
+      return {
+        kind: 'txtMsg',
+        destHash: payload.subarray(0, 1).toString('hex'),
+        srcHash: payload.subarray(1, 2).toString('hex'),
+        macHex: payload.subarray(2, 4).toString('hex'),
+        cipherLen: payload.length - 4,
+      };
+    }
+    case PAYLOAD_TYPE.GRP_TXT: {
+      if (payload.length < 3) break;
+      return {
+        kind: 'grpTxt',
+        channelHash: payload.subarray(0, 1).toString('hex'),
+        macHex: payload.subarray(1, 3).toString('hex'),
+        cipherLen: payload.length - 3,
+      };
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
