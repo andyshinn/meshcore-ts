@@ -39,6 +39,6 @@ describe('outbound misc queries', () => {
     frame.writeUInt32LE(902_000_000, 1);
     frame.writeUInt32LE(928_000_000, 5);
     deliver(transport, frame);
-    expect(await p).toEqual([{ lowerHz: 902_000_000, upperHz: 928_000_000 }]);
+    expect(await p).toEqual([{ lowerKhz: 902_000_000, upperKhz: 928_000_000 }]);
   });
 });

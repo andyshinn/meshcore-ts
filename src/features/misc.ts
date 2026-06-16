@@ -2,10 +2,13 @@ import { Buffer } from 'node:buffer';
 import { CMD, RESP } from '../codes';
 import type { FeatureContext } from '../feature';
 
-/** An inclusive frequency range (Hz) the radio is permitted to repeat on. */
+/**
+ * An inclusive frequency range the radio is permitted to repeat on.
+ * Values are in **kHz** (e.g. 433000 = 433 MHz, 869495 = 869.495 MHz, 918000 = 918 MHz).
+ */
 export interface RepeatFreqRange {
-  lowerHz: number;
-  upperHz: number;
+  lowerKhz: number;
+  upperKhz: number;
 }
 
 // CMD_HAS_CONNECTION: [0x1c][pubkey 32B]. Replies RESP_OK (an active connection
@@ -31,7 +34,7 @@ export function encodeGetAllowedRepeatFreq(): Buffer {
 export function decodeAllowedRepeatFreq(frame: Buffer): RepeatFreqRange[] {
   const out: RepeatFreqRange[] = [];
   for (let i = 1; i + 8 <= frame.length; i += 8) {
-    out.push({ lowerHz: frame.readUInt32LE(i), upperHz: frame.readUInt32LE(i + 4) });
+    out.push({ lowerKhz: frame.readUInt32LE(i), upperKhz: frame.readUInt32LE(i + 4) });
   }
   return out;
 }
