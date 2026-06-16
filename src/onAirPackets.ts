@@ -123,9 +123,35 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
         extraHex: payload.subarray(1 + pathByteLen + 1).toString('hex'),
       };
     }
+    case PAYLOAD_TYPE.TRACE: {
+      if (payload.length < 9) break;
+      const flags = payload[8];
+      const hashSize = 1 << (flags & 0x03);
+      const hashes = payload.subarray(9);
+      return {
+        kind: 'trace',
+        tag: payload.readUInt32LE(0),
+        authCode: payload.readUInt32LE(4),
+        flags,
+        hopCount: Math.floor(hashes.length / hashSize),
+        pathHashesHex: hashes.toString('hex'),
+        snr: snrFromPathHex(header.pathHex),
+      };
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
   }
   return { kind: 'raw', payloadType: header.payloadType, payloadHex: payload.toString('hex') };
+}
+
+/** Each on-air path byte in a TRACE packet is a per-hop SNR sample: a signed
+ *  int8 scaled by 1/4 (dB). Returns one value per byte of `pathHex`. */
+function snrFromPathHex(pathHex: string): number[] {
+  const out: number[] = [];
+  for (let i = 0; i + 1 < pathHex.length; i += 2) {
+    const byte = Number.parseInt(pathHex.slice(i, i + 2), 16);
+    out.push((byte > 127 ? byte - 256 : byte) / 4);
+  }
+  return out;
 }
