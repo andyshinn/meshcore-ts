@@ -4,12 +4,18 @@ import { APP_PROTOCOL_VERSION, CMD, RESP } from '../codes';
 import type { Feature } from '../feature';
 import { pathHashModeToSize } from './pathHash';
 
-// RESP_DEVICE_INFO. The official client treats most of the payload as
-// firmware-version-specific metadata; we only need the few fields we surface
-// in the UI. Bytes past `firmware_ver_code` evolve across firmware revisions,
-// so optional readers fall back to undefined when the frame is too short.
-// Named `DeviceInfoFrame` to distinguish the parsed wire reply from the app's
-// `DeviceInfo` state type in shared/types.ts.
+// RESP_DEVICE_INFO. Reply to CMD_DEVICE_QUERY. The firmware writes a fixed
+// layout (MeshCore companion_radio MyMesh.cpp, CMD_DEVICE_QUERY handler):
+//   [1]      firmware_ver_code
+//   [2]      max_contacts / 2          [3]  max_group_channels
+//   [4..7]   ble_pin (uint32 LE)
+//   [8..19]  firmware build date       (C-string, e.g. "19 Apr 2026")
+//   [20..59] manufacturer / model      (C-string, board.getManufacturerName())
+//   [60..79] firmware version          (C-string, e.g. "v1.15.0")
+//   [80]     client_repeat (v9+)       [81] path_hash_mode (v10+)
+// Older firmware emits a shorter frame, so fixed-offset readers fall back to
+// undefined / '' when the frame doesn't reach the field. Named `DeviceInfoFrame`
+// to distinguish the parsed wire reply from the app's `DeviceInfo` state type.
 export interface DeviceInfoFrame {
   /** Firmware capability level: 1=v1.x, ..., 9 adds client_repeat,
    *  10 adds path_hash_mode in the device info reply. */
@@ -21,9 +27,25 @@ export interface DeviceInfoFrame {
   clientRepeat?: boolean;
   /** Path hash mode echo (0|1|2 -> 1|2|3 bytes per hop) when firmware >= 10. */
   pathHashMode?: number;
-  /** Best-effort device model string scanned from the trailing printable bytes.
-   *  May be empty when the firmware doesn't emit one. */
+  /** Manufacturer / board model string at offset 20..59 (e.g. "Heltec T114").
+   *  Empty when the frame is too short to contain it. */
   deviceModel: string;
+  /** BLE pairing PIN (uint32 LE at 4..7); 0 = unset / random per session.
+   *  Undefined when the frame predates this field. */
+  blePin?: number;
+  /** Firmware build date string at 8..19 (e.g. "19 Apr 2026"). */
+  firmwareBuildDate?: string;
+  /** Human-readable firmware version at 60..79 (e.g. "v1.15.0"). Distinct from
+   *  `firmwareVerCode`, the numeric capability byte. */
+  firmwareVersion?: string;
+}
+
+/** Read a fixed-width null-padded ASCII field as a trimmed string. Returns up to
+ *  the first NUL (the firmware null-terminates via strzcpy / memset+strcpy). */
+function readFixedCString(frame: Buffer, start: number, len: number): string {
+  const slice = frame.subarray(start, start + len);
+  const nul = slice.indexOf(0);
+  return (nul === -1 ? slice : slice.subarray(0, nul)).toString('utf8').trim();
 }
 
 // CMD_DEVICE_QUERY: [0x16][app_protocol_version u8]. Firmware reads byte [1]
@@ -41,15 +63,13 @@ export function decodeDeviceInfo(frame: Buffer): DeviceInfoFrame | null {
   const firmwareVerCode = frame[1];
   const maxContacts = frame[2] * 2;
   const maxChannels = frame[3];
+  // Fixed-offset string/pin fields; require the whole field to be present.
+  const blePin = frame.length >= 8 ? frame.readUInt32LE(4) : undefined;
+  const firmwareBuildDate = frame.length >= 20 ? readFixedCString(frame, 8, 12) : undefined;
+  const deviceModel = frame.length >= 60 ? readFixedCString(frame, 20, 40) : '';
+  const firmwareVersion = frame.length >= 80 ? readFixedCString(frame, 60, 20) : undefined;
   const clientRepeat = frame.length > 80 ? frame[80] !== 0 : undefined;
   const pathHashMode = frame.length > 81 ? frame[81] : undefined;
-  let start = frame.length;
-  while (start > 4) {
-    const b = frame[start - 1];
-    if (b >= 0x20 && b < 0x7f) start -= 1;
-    else break;
-  }
-  const deviceModel = frame.subarray(start).toString('utf8').trim();
   return {
     firmwareVerCode,
     maxContacts,
@@ -57,6 +77,9 @@ export function decodeDeviceInfo(frame: Buffer): DeviceInfoFrame | null {
     clientRepeat,
     pathHashMode,
     deviceModel,
+    blePin,
+    firmwareBuildDate,
+    firmwareVersion,
   };
 }
 
@@ -67,12 +90,19 @@ export const deviceInfoFeature: Feature = {
   handle: (_code, frame, ctx) => {
     const parsed = decodeDeviceInfo(frame);
     if (!parsed) return;
+    const prev = ctx.state.getDeviceInfo();
     const next = {
-      ...ctx.state.getDeviceInfo(),
+      ...prev,
       firmwareVerCode: parsed.firmwareVerCode,
       maxContacts: parsed.maxContacts,
       maxChannels: parsed.maxChannels,
-      deviceModel: parsed.deviceModel || ctx.state.getDeviceInfo().deviceModel,
+      // Empty string / undefined means a short frame didn't carry the field —
+      // keep whatever we already knew rather than clobbering it. blePin uses ??
+      // because 0 is a valid value ("unset / random pin").
+      deviceModel: parsed.deviceModel || prev.deviceModel,
+      firmwareVersion: parsed.firmwareVersion || prev.firmwareVersion,
+      firmwareBuildDate: parsed.firmwareBuildDate || prev.firmwareBuildDate,
+      blePin: parsed.blePin ?? prev.blePin,
     };
     ctx.state.setDeviceInfo(next);
     ctx.events.emit('deviceInfo', next);

@@ -106,6 +106,9 @@ describe('DEFAULT_DEVICE_INFO', () => {
     expect(DEFAULT_DEVICE_INFO).toEqual({
       firmwareVerCode: 0,
       deviceModel: '',
+      firmwareVersion: '',
+      firmwareBuildDate: '',
+      blePin: 0,
       maxContacts: 0,
       maxChannels: 0,
       channelsUsed: 0,

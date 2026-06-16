@@ -269,6 +269,12 @@ export const DEFAULT_GPS_CONFIG: GpsConfig = {
 export interface DeviceInfo {
   firmwareVerCode: number;
   deviceModel: string;
+  /** Human-readable firmware version, e.g. "v1.15.0" (distinct from firmwareVerCode). */
+  firmwareVersion: string;
+  /** Firmware build date string, e.g. "19 Apr 2026". */
+  firmwareBuildDate: string;
+  /** Device BLE pairing PIN; 0 = unset / random per session. */
+  blePin: number;
   maxContacts: number;
   maxChannels: number;
   channelsUsed: number;
@@ -280,6 +286,9 @@ export interface DeviceInfo {
 export const DEFAULT_DEVICE_INFO: DeviceInfo = {
   firmwareVerCode: 0,
   deviceModel: '',
+  firmwareVersion: '',
+  firmwareBuildDate: '',
+  blePin: 0,
   maxContacts: 0,
   maxChannels: 0,
   channelsUsed: 0,
