@@ -672,7 +672,7 @@ describe('decodeOnAirPacket — trace', () => {
     expect(pkt.payloadTypeName).toBe('TRACE');
     expect(pkt.payload).toEqual({
       kind: 'trace',
-      tag: 3180988834, // 0xbd894da2, little-endian
+      tag: 3179892130, // 0xbd894da2, little-endian
       authCode: 0,
       flags: 0,
       hopCount: 1,
@@ -789,7 +789,7 @@ describe('decodeOnAirPacket — control', () => {
       kind: 'controlDiscoverResp',
       nodeType: 2, // repeater (rawFlags 0x92 & 0x0f)
       snr: -9, // 0xdc as int8 = -36, /4
-      tag: 1530983221, // 0x5b3e3335
+      tag: 1530802997, // 0x5b3e3335
       publicKeyHex: '4fbb374d26e77a3af0a0e3d34a7174131bbebf2341ee948b6f4b13cf800c928f',
     });
   });
