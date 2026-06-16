@@ -32,8 +32,8 @@ describe('channelMessages: decodeChannelMsgV3', () => {
     expect(msg?.cleanBody).toBe('hello');
   });
 
-  it('returns null below 12 bytes', () => {
-    expect(decodeChannelMsgV3(Buffer.alloc(11))).toBeNull();
+  it('returns null below 11 bytes', () => {
+    expect(decodeChannelMsgV3(Buffer.alloc(10))).toBeNull();
   });
 });
 
@@ -56,5 +56,31 @@ describe('channelMessages: decodeChannelMsgV1 (legacy, no snr prefix)', () => {
 
   it('returns null below 8 bytes', () => {
     expect(decodeChannelMsgV1(Buffer.alloc(7))).toBeNull();
+  });
+});
+
+// ---- FIX B: channel V3 min-length guard (Fix B) ------------------------
+
+describe('channelMessages: decodeChannelMsgV3 empty-body 11-byte frame (Fix B)', () => {
+  it('accepts an 11-byte frame (header-only, empty body) as a valid empty-body message', () => {
+    // V3 header ends at offset 10; body starts at 11. An 11-byte frame is exactly
+    // the minimum for a valid (empty-body) message.
+    const frame = Buffer.alloc(11);
+    frame[0] = 0x11;
+    frame.writeInt8(20, 1); // snr*4 = 20 → 5 dB
+    frame[4] = 7; // channel idx
+    frame[5] = 0xff; // path_len
+    frame[6] = 0; // txt_type PLAIN
+    frame.writeUInt32LE(1_000_000, 7); // timestamp
+    // no body bytes — that's the point
+    const msg = decodeChannelMsgV3(frame);
+    expect(msg).not.toBeNull();
+    expect(msg?.body).toBe('');
+    expect(msg?.channelIdx).toBe(7);
+    expect(msg?.timestampUnix).toBe(1_000_000);
+  });
+
+  it('still returns null below 11 bytes', () => {
+    expect(decodeChannelMsgV3(Buffer.alloc(10))).toBeNull();
   });
 });

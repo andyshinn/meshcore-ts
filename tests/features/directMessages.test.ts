@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
+import { TXT_TYPE } from '../../src/codes';
 import type { FeatureContext } from '../../src/feature';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
@@ -418,5 +419,104 @@ describe('directMessages: failOldestDmSend / resetDmState', () => {
     expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
     expect(ctx.rt.dm.pendingDmAcks.size).toBe(0);
     expect(messageStates.filter((s) => s.state === 'failed').map((s) => s.id)).toContain('m2');
+  });
+});
+
+// ---- FIX A: SIGNED_PLAIN (txt_type=2) message decoding -----------------
+
+describe('directMessages: decodeContactMsgV3 SIGNED_PLAIN (Fix A)', () => {
+  it('strips the 4-byte sender_prefix from the body and exposes it as senderPrefixExtraHex (V3)', () => {
+    // V3 signed frame layout:
+    //   [0]=0x10 [1]=snr*4 [2..3]=rsv [4..9]=from-prefix [10]=path_len
+    //   [11]=txt_type(2) [12..15]=timestamp [16..19]=sender_prefix(4B) [20..]=text
+    const senderExtra = Buffer.from('deadbeef', 'hex'); // 4B extra sender prefix
+    const text = Buffer.from('hello signed', 'utf8');
+    const frame = Buffer.alloc(16 + 4 + text.length);
+    frame[0] = 0x10;
+    frame.writeInt8(8, 1); // snr*4 = 8 → 2 dB
+    Buffer.from('aabbccddeeff', 'hex').copy(frame, 4); // from-prefix
+    frame[10] = 0xff; // path_len
+    frame[11] = TXT_TYPE.SIGNED_PLAIN; // txt_type = 2
+    frame.writeUInt32LE(42, 12); // timestamp
+    senderExtra.copy(frame, 16); // 4-byte sender prefix extra
+    text.copy(frame, 20); // actual text starts at 20
+    const msg = decodeContactMsgV3(frame);
+    expect(msg?.txtType).toBe(TXT_TYPE.SIGNED_PLAIN);
+    expect(msg?.body).toBe('hello signed'); // clean text, no garbage bytes
+    expect(msg?.senderPrefixExtraHex).toBe('deadbeef');
+  });
+
+  it('leaves senderPrefixExtraHex undefined for PLAIN messages (V3)', () => {
+    const text = Buffer.from('plain msg', 'utf8');
+    const frame = Buffer.alloc(16 + text.length);
+    frame[0] = 0x10;
+    Buffer.from('aabbccddeeff', 'hex').copy(frame, 4);
+    frame[10] = 0xff;
+    frame[11] = TXT_TYPE.PLAIN; // txt_type = 0
+    frame.writeUInt32LE(1, 12);
+    text.copy(frame, 16);
+    const msg = decodeContactMsgV3(frame);
+    expect(msg?.body).toBe('plain msg');
+    expect(msg?.senderPrefixExtraHex).toBeUndefined();
+  });
+});
+
+describe('directMessages: decodeContactMsgV1 SIGNED_PLAIN (Fix A)', () => {
+  it('strips the 4-byte sender_prefix from the body and exposes it as senderPrefixExtraHex (V1)', () => {
+    // V1 signed frame layout:
+    //   [0]=0x07 [1..6]=from-prefix [7]=path_len [8]=txt_type(2)
+    //   [9..12]=timestamp [13..16]=sender_prefix(4B) [17..]=text
+    const senderExtra = Buffer.from('cafebabe', 'hex');
+    const text = Buffer.from('v1 signed', 'utf8');
+    const frame = Buffer.alloc(13 + 4 + text.length);
+    frame[0] = 0x07;
+    Buffer.from('aabbccddeeff', 'hex').copy(frame, 1);
+    frame[7] = 3; // path_len
+    frame[8] = TXT_TYPE.SIGNED_PLAIN; // txt_type = 2
+    frame.writeUInt32LE(77, 9); // timestamp
+    senderExtra.copy(frame, 13); // 4-byte sender prefix extra
+    text.copy(frame, 17); // actual text starts at 17
+    const msg = decodeContactMsgV1(frame);
+    expect(msg?.txtType).toBe(TXT_TYPE.SIGNED_PLAIN);
+    expect(msg?.body).toBe('v1 signed');
+    expect(msg?.senderPrefixExtraHex).toBe('cafebabe');
+  });
+
+  it('leaves senderPrefixExtraHex undefined for PLAIN messages (V1)', () => {
+    const text = Buffer.from('plain v1', 'utf8');
+    const frame = Buffer.alloc(13 + text.length);
+    frame[0] = 0x07;
+    Buffer.from('aabbccddeeff', 'hex').copy(frame, 1);
+    frame[7] = 0;
+    frame[8] = TXT_TYPE.PLAIN;
+    frame.writeUInt32LE(1, 9);
+    text.copy(frame, 13);
+    const msg = decodeContactMsgV1(frame);
+    expect(msg?.body).toBe('plain v1');
+    expect(msg?.senderPrefixExtraHex).toBeUndefined();
+  });
+});
+
+// ---- FIX C: decodeSentAck flood flag robustness (Fix C) ----------------
+
+describe('directMessages: decodeSentAck flood flag non-zero (Fix C)', () => {
+  it('treats any non-zero flood byte as flood=true, not just 1', () => {
+    const frame = Buffer.alloc(10);
+    frame[0] = 0x06;
+    frame[1] = 2; // firmware may write values other than 1
+    Buffer.from('deadbeef', 'hex').copy(frame, 2);
+    frame.writeUInt32LE(1000, 6);
+    const ack = decodeSentAck(frame);
+    expect(ack?.flood).toBe(true);
+  });
+
+  it('treats flood byte 0 as flood=false', () => {
+    const frame = Buffer.alloc(10);
+    frame[0] = 0x06;
+    frame[1] = 0;
+    Buffer.from('deadbeef', 'hex').copy(frame, 2);
+    frame.writeUInt32LE(1000, 6);
+    const ack = decodeSentAck(frame);
+    expect(ack?.flood).toBe(false);
   });
 });

@@ -53,7 +53,7 @@ export interface ChannelMsgV3 {
 }
 
 export function decodeChannelMsgV3(frame: Buffer): ChannelMsgV3 | null {
-  if (frame.length < 12) return null;
+  if (frame.length < 11) return null;
   const snrRaw = frame.readInt8(1);
   const channelIdx = frame[4];
   const pathLen = frame[5];

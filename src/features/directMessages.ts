@@ -82,7 +82,8 @@ export function encodeSendDmText(opts: {
 //   [10]: path_len (0xFF = direct/no flood)
 //   [11]: txt_type
 //   [12..15]: timestamp uint32 LE (UNIX seconds)
-//   [16..]: text body (no "name: " prefix — sender identified by pubkey prefix)
+//   [16..19]: sender_prefix 4B (ONLY when txt_type == SIGNED_PLAIN)
+//   [16..] or [20..]: text body
 export interface ContactMsgV3 {
   snrDb: number;
   senderPubKeyPrefixHex: string;
@@ -90,6 +91,8 @@ export interface ContactMsgV3 {
   txtType: number;
   timestampUnix: number;
   body: string;
+  /** Only present when txtType === TXT_TYPE.SIGNED_PLAIN. */
+  senderPrefixExtraHex?: string;
 }
 
 export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
@@ -99,7 +102,15 @@ export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
   const pathLen = frame[10];
   const txtType = frame[11];
   const timestampUnix = frame.readUInt32LE(12);
-  const body = frame.subarray(16).toString('utf8').replace(/\0+$/, '');
+  // When txt_type is SIGNED_PLAIN, the firmware inserts a 4-byte sender_prefix
+  // between the timestamp and the text (firmware MyMesh.cpp queueMessage / extra arg).
+  let senderPrefixExtraHex: string | undefined;
+  let bodyStart = 16;
+  if (txtType === TXT_TYPE.SIGNED_PLAIN) {
+    senderPrefixExtraHex = frame.subarray(16, 20).toString('hex');
+    bodyStart = 20;
+  }
+  const body = frame.subarray(bodyStart).toString('utf8').replace(/\0+$/, '');
   return {
     snrDb: snrRaw / 4,
     senderPubKeyPrefixHex,
@@ -107,6 +118,7 @@ export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
     txtType,
     timestampUnix,
     body,
+    senderPrefixExtraHex,
   };
 }
 
@@ -116,15 +128,24 @@ export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
 //   [7]: path_len
 //   [8]: txt_type
 //   [9..12]: timestamp uint32 LE
-//   [13..]: text body
+//   [13..16]: sender_prefix 4B (ONLY when txt_type == SIGNED_PLAIN)
+//   [13..] or [17..]: text body
 export function decodeContactMsgV1(frame: Buffer): ContactMsgV3 | null {
   if (frame.length < 13) return null;
   const senderPubKeyPrefixHex = frame.subarray(1, 7).toString('hex');
   const pathLen = frame[7];
   const txtType = frame[8];
   const timestampUnix = frame.readUInt32LE(9);
-  const body = frame.subarray(13).toString('utf8').replace(/\0+$/, '');
-  return { snrDb: 0, senderPubKeyPrefixHex, pathLen, txtType, timestampUnix, body };
+  // When txt_type is SIGNED_PLAIN, the firmware inserts a 4-byte sender_prefix
+  // between the timestamp and the text.
+  let senderPrefixExtraHex: string | undefined;
+  let bodyStart = 13;
+  if (txtType === TXT_TYPE.SIGNED_PLAIN) {
+    senderPrefixExtraHex = frame.subarray(13, 17).toString('hex');
+    bodyStart = 17;
+  }
+  const body = frame.subarray(bodyStart).toString('utf8').replace(/\0+$/, '');
+  return { snrDb: 0, senderPubKeyPrefixHex, pathLen, txtType, timestampUnix, body, senderPrefixExtraHex };
 }
 
 // RESP_SENT (0x06) acknowledging a CMD_SEND_TXT_MSG / CMD_SEND_CHAN_TXT_MSG:
@@ -141,7 +162,7 @@ export interface SentAck {
 export function decodeSentAck(frame: Buffer): SentAck | null {
   if (frame.length < 10) return null;
   return {
-    flood: frame[1] === 1,
+    flood: frame[1] !== 0,
     expectedAckHex: frame.subarray(2, 6).toString('hex'),
     estTimeoutMs: frame.readUInt32LE(6),
   };
