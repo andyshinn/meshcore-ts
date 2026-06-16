@@ -3,10 +3,17 @@
 
 export type TransportState = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
 
+/** Which physical transport carried a frame. */
+export type TransportType = 'ble' | 'serial';
+
+/** Coarse frame classification: a literal mesh packet vs. a companion-radio
+ *  event/response. Mirrors the discriminant on the frame parser's ParsedFrame. */
+export type FrameKind = 'mesh' | 'companion';
+
 export interface RawPacket {
   timestamp: number;
-  transportType: 'ble' | 'serial';
-  kind: 'mesh' | 'companion';
+  transportType: TransportType;
+  kind: FrameKind;
   // Verbatim transport frame — what the bridge fans out to TCP/WS proxy clients.
   // Companion: includes the type code byte. Mesh: includes the 0x84/0x88 + SNR/RSSI prefix.
   hex: string;
@@ -28,8 +35,9 @@ export interface RawPacket {
  *  and contacts are summed to drive a "Syncing N/M" indicator. `idle` = not
  *  currently syncing (either pre-connect or post-completion); `syncing` =
  *  handshake in flight; `done` = handshake finished this session. */
+export type SyncPhase = 'idle' | 'syncing' | 'done';
 export interface SyncProgress {
-  phase: 'idle' | 'syncing' | 'done';
+  phase: SyncPhase;
   channels: { done: number; total: number };
   contacts: { done: number; total: number };
 }
@@ -117,8 +125,9 @@ export type MessageState = 'sending' | 'sent' | 'heard' | 'ack' | 'failed' | 're
  *  (1, 2, or 3 bytes wide) as encoded by the firmware in the on-air path.
  *  `unnamed: true` means we only know the prefix byte(s) — no advert ever seen
  *  for that prefix. */
+export type MessageHopKind = 'origin' | 'hop' | 'sink';
 export interface MessageHop {
-  kind: 'origin' | 'hop' | 'sink';
+  kind: MessageHopKind;
   shortId: string;
   name?: string | null;
   pk?: string | null;

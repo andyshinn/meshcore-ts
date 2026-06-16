@@ -349,10 +349,15 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
   ctx.events.emit('contacts', ctx.state.getContacts());
 }
 
+/** Where an ingested contact was heard: `'sync'` (RESP_CONTACT during the
+ *  GET_CONTACTS handshake — always on-radio) or `'advert'` (live PUSH_NEW_ADVERT
+ *  — on-radio only if already in the store). */
+export type ContactSource = 'sync' | 'advert';
+
 /** Upsert a contact heard from RESP_CONTACT (sync, on-radio) or
  *  PUSH_NEW_ADVERT (live advert — on-radio only if already in the store).
  *  Always records into the discovered pool with an app-tracked first-heard. */
-export function ingestContact(ctx: FeatureContext, record: ContactRecord, source: 'sync' | 'advert'): void {
+export function ingestContact(ctx: FeatureContext, record: ContactRecord, source: ContactSource): void {
   const fullKey = `c:${record.publicKeyHex}`;
   const alreadyOnRadio = ctx.state.getContacts().some((c) => c.key === fullKey);
   const onRadio = source === 'sync' ? true : alreadyOnRadio;

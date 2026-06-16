@@ -1486,7 +1486,7 @@ export class MeshCoreSession {
   async repeaterLogin(
     contactKey: string,
     password: string,
-  ): Promise<LoginSuccess & { mode: AdminMode; effective: 'direct' | 'flood' | 'path' }> {
+  ): Promise<LoginSuccess & { mode: AdminMode; effective: repeaterAdmin.RepeaterReachMode }> {
     return repeaterAdmin.repeaterLogin(this.ctx, contactKey, password);
   }
 

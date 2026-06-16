@@ -33,6 +33,11 @@ import {
 import type { AdminMode, AdminRole } from '../session/adminSessions';
 import * as directMessages from './directMessages';
 
+/** How a repeater login was actually dispatched, so the UI can label the toast:
+ *  `'direct'` (companion-side CMD_SEND_LOGIN), `'path'` (mesh-routed over a known
+ *  out-path) or `'flood'` (mesh-routed, no path). */
+export type RepeaterReachMode = 'direct' | 'flood' | 'path';
+
 const ADMIN_SENT_TIMEOUT_MS = 5_000;
 const ADMIN_REPLY_TIMEOUT_MS = 20_000;
 const CLI_REPLY_TIMEOUT_MS = 30_000;
@@ -231,14 +236,14 @@ export async function repeaterLogin(
   ctx: FeatureContext,
   contactKey: string,
   password: string,
-): Promise<LoginSuccess & { mode: AdminMode; effective: 'direct' | 'flood' | 'path' }> {
+): Promise<LoginSuccess & { mode: AdminMode; effective: RepeaterReachMode }> {
   const lookup = lookupRepeaterContact(ctx, contactKey);
   if (!lookup.ok) throw new Error(lookup.error);
   const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
   const preferDirect = contact?.preferDirect === true;
   const hasPath = !!contact?.outPathHex && contact.outPathHex.length > 0;
   const mode: AdminMode = preferDirect ? 'local' : 'remote';
-  const effective: 'direct' | 'flood' | 'path' = preferDirect ? 'direct' : hasPath ? 'path' : 'flood';
+  const effective: RepeaterReachMode = preferDirect ? 'direct' : hasPath ? 'path' : 'flood';
 
   const prefix = lookup.publicKeyHex.slice(0, 12);
   const wait = ctx.admin.awaitLogin<LoginSuccess>(prefix, ADMIN_REPLY_TIMEOUT_MS);

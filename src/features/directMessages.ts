@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { CMD, PUSH, RESP, TXT_TYPE } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
-import type { Contact, Message } from '../types';
+import type { Contact, Message, MessageState } from '../types';
 import { encodeResetPath } from './contacts';
 import * as drain from './drain';
 
@@ -314,12 +314,16 @@ export async function sendDmTextWithRetry(
   return { ok: false, error: 'all retry attempts failed' };
 }
 
+/** Result of waiting on a single DM attempt: the radio confirmed delivery, or
+ *  we gave up (terminal failure or timeout — both mean "retry/abort"). */
+type DmOutcome = 'ack' | 'timeout';
+
 /** Resolve when `messageId` reaches a terminal state ('ack' or 'failed'),
  *  or when `timeoutMs` elapses. Used by sendDmTextWithRetry to know when an
  *  attempt has succeeded vs. when to retry. */
-function awaitDmOutcome(ctx: FeatureContext, messageId: string, timeoutMs: number): Promise<'ack' | 'timeout'> {
+function awaitDmOutcome(ctx: FeatureContext, messageId: string, timeoutMs: number): Promise<DmOutcome> {
   return new Promise((resolve) => {
-    const handler = (id: string, state: string) => {
+    const handler = (id: string, state: MessageState) => {
       if (id !== messageId) return;
       if (state === 'ack') {
         cleanup();

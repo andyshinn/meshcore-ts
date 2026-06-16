@@ -64,14 +64,16 @@ const RESP_NAMES: Record<number, string> = {
 const PUSH_RAW_DATA = 0x84;
 const PUSH_LOG_RX_DATA = 0x88;
 
+/** Which push delivered a mesh packet. Only `'log_rx'` (0x88) is safe to feed
+ *  into the mesh-packet parser — 0x84 (`'raw'`) writes a 0xFF reserved byte
+ *  where path_len would be, so its bytes don't follow the Packet wire format. */
+export type MeshSource = 'raw' | 'log_rx';
+
 export type ParsedFrame =
   | {
       kind: 'mesh';
-      /** Which push delivered this mesh packet. Only `'log_rx'` (0x88) is safe
-       *  to feed into the mesh-packet parser — 0x84 (`'raw'`) writes a 0xFF
-       *  reserved byte where path_len would be, so its bytes don't follow the
-       *  Packet wire format. */
-      source: 'raw' | 'log_rx';
+      /** See {@link MeshSource}. */
+      source: MeshSource;
       meshHex: string;
       meshBytes: Buffer;
       snr: number;
