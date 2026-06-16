@@ -128,11 +128,61 @@ export function applySelfInfo(ctx: FeatureContext, frame: Buffer): SelfInfo | nu
   };
   ctx.state.setOwner(owner);
   ctx.events.emit('owner', owner);
+
+  // Fold the radio's live LoRa config into RadioSettings. SELF_INFO carries
+  // freq (kHz on the wire → Hz here) / bw (already Hz) / sf / cr / tx power, but
+  // NOT repeatMode or pathHashMode, so preserve those. Emit only on change so
+  // repeated getSelfInfo() calls don't spam identical events.
+  const prevRadio = ctx.state.getRadioSettings();
+  const nextRadio = {
+    ...prevRadio,
+    frequencyHz: parsed.freqKhz * 1000,
+    bandwidthHz: parsed.bwHz,
+    spreadingFactor: parsed.sf,
+    codingRate: parsed.cr,
+    txPowerDbm: parsed.txPowerDbm,
+  };
+  if (
+    nextRadio.frequencyHz !== prevRadio.frequencyHz ||
+    nextRadio.bandwidthHz !== prevRadio.bandwidthHz ||
+    nextRadio.spreadingFactor !== prevRadio.spreadingFactor ||
+    nextRadio.codingRate !== prevRadio.codingRate ||
+    nextRadio.txPowerDbm !== prevRadio.txPowerDbm
+  ) {
+    ctx.state.setRadioSettings(nextRadio);
+    ctx.events.emit('radioSettings', nextRadio);
+  }
+
+  // Fold the radio's advertised identity into DeviceIdentity (otherwise only
+  // populated by the local advert setters). 0/0 lat/lon is the firmware "no GPS"
+  // sentinel → null; advert_loc_policy != 0 means it shares position in adverts.
+  const hasFix = parsed.latDeg !== 0 || parsed.lonDeg !== 0;
+  const prevIdentity = ctx.state.getDeviceIdentity();
+  const nextIdentity = {
+    ...prevIdentity,
+    name: parsed.name,
+    publicKeyHex: parsed.publicKeyHex,
+    lat: hasFix ? parsed.latDeg : null,
+    lon: hasFix ? parsed.lonDeg : null,
+    sharePositionInAdvert: parsed.advertLocPolicy !== 0,
+  };
+  if (
+    nextIdentity.name !== prevIdentity.name ||
+    nextIdentity.publicKeyHex !== prevIdentity.publicKeyHex ||
+    nextIdentity.lat !== prevIdentity.lat ||
+    nextIdentity.lon !== prevIdentity.lon ||
+    nextIdentity.sharePositionInAdvert !== prevIdentity.sharePositionInAdvert
+  ) {
+    ctx.state.setDeviceIdentity(nextIdentity);
+    ctx.events.emit('deviceIdentity', nextIdentity);
+  }
+
   ctx.log.debug(`self-info: "${owner.name}" (${owner.publicKeyShort})`);
   return parsed;
 }
 
-// RESP handler: surface the radio's identity as the app Owner.
+// RESP handler: surface the radio's identity as the app Owner, radio config,
+// and advertised device identity.
 export const selfInfoFeature: Feature = {
   handles: [RESP.SELF_INFO],
   handle: (_code, frame, ctx) => {

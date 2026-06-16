@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { decodeSelfInfo, encodeAppStart } from '../../src/features/selfInfo';
+import type { DeviceIdentity, RadioSettings } from '../../src/types';
+import { deliver, makeSession } from '../support/harness';
 
 // De-framed RESP_SELF_INFO captured from a connected Heltec/egrmesh "Hand" node
 // (donor fixture connect-session.json → "selfInfo"). Full 71-byte frame:
@@ -231,5 +233,64 @@ describe('selfInfo encode/decode', () => {
     it('bwHz', () => expect(self?.bwHz).toBe(62500));
     it('sf', () => expect(self?.sf).toBe(7));
     it('cr', () => expect(self?.cr).toBe(5));
+  });
+});
+
+describe('applySelfInfo state fold (via session handler)', () => {
+  const pubKey = Buffer.from('aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', 'hex');
+  const frame = buildFrame({
+    pubKey,
+    txPowerDbm: -5,
+    latRaw: Math.round(37.774929 * 1_000_000),
+    lonRaw: Math.round(-122.419418 * 1_000_000),
+    advertLocPolicy: 1,
+    freqKhz: 915000,
+    bwHz: 250000,
+    sf: 10,
+    cr: 5,
+    name: 'Café Node',
+  });
+
+  it('folds radio params into RadioSettings and emits radioSettings (freq kHz→Hz)', () => {
+    const { session, transport } = makeSession();
+    const settings: RadioSettings[] = [];
+    session.events.on('radioSettings', (s) => settings.push(s));
+    deliver(transport, frame);
+    expect(settings.length).toBe(1);
+    expect(settings[0]).toMatchObject({
+      frequencyHz: 915_000_000, // 915000 kHz → Hz
+      bandwidthHz: 250_000,
+      spreadingFactor: 10,
+      codingRate: 5,
+      txPowerDbm: -5,
+    });
+    // SELF_INFO doesn't carry these — defaults must be preserved, not clobbered.
+    expect(settings[0]?.repeatMode).toBe(false);
+    expect(settings[0]?.pathHashMode).toBe(2);
+    session.stop();
+  });
+
+  it('folds advertised identity into DeviceIdentity and emits deviceIdentity', () => {
+    const { session, transport } = makeSession();
+    const ids: DeviceIdentity[] = [];
+    session.events.on('deviceIdentity', (d) => ids.push(d));
+    deliver(transport, frame);
+    expect(ids.length).toBe(1);
+    expect(ids[0]?.name).toBe('Café Node');
+    expect(ids[0]?.publicKeyHex).toBe(pubKey.toString('hex'));
+    expect(ids[0]?.lat).toBeCloseTo(37.774929, 6);
+    expect(ids[0]?.lon).toBeCloseTo(-122.419418, 6);
+    expect(ids[0]?.sharePositionInAdvert).toBe(true); // advert_loc_policy = 1
+    session.stop();
+  });
+
+  it('maps the 0/0 "no GPS" sentinel to null lat/lon', () => {
+    const { session, transport } = makeSession();
+    const ids: DeviceIdentity[] = [];
+    session.events.on('deviceIdentity', (d) => ids.push(d));
+    deliver(transport, buildFrame({ name: 'No GPS', latRaw: 0, lonRaw: 0 }));
+    expect(ids.at(-1)?.lat).toBeNull();
+    expect(ids.at(-1)?.lon).toBeNull();
+    session.stop();
   });
 });
