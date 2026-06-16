@@ -41,5 +41,6 @@ Finding your serial port:
 | `get-repeater-neighbours.ts <port> <pubkey-prefix> [pw]` | serial | Login + fetch repeater neighbours |
 | `get-sensor-telemetry.ts <port> <pubkey-prefix>` | serial | Fetch sensor telemetry (no login) |
 | `ble-get-contacts.ts` | BLE | List contacts over BLE (requires `@stoprocent/noble`) |
+| `ble-get-device-info.ts` | BLE | Print device + radio info over BLE (requires `@stoprocent/noble`) |
 
 The two parse examples run with no hardware and print deterministic output.
