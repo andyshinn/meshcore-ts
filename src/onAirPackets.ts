@@ -102,6 +102,27 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
         cipherLen: payload.length - 35,
       };
     }
+    case PAYLOAD_TYPE.ACK: {
+      if (payload.length < 4) break;
+      return { kind: 'ack', checksumHex: payload.subarray(0, 4).toString('hex') };
+    }
+    case PAYLOAD_TYPE.PATH: {
+      if (payload.length < 2) break;
+      const pathLenByte = payload[0];
+      const pathLen = pathLenByte & 0x3f;
+      const hashSize = (pathLenByte >> 6) + 1;
+      const pathByteLen = pathLen * hashSize;
+      // Need the path hashes plus the 1-byte extraType that follows them.
+      if (payload.length < 1 + pathByteLen + 1) break;
+      return {
+        kind: 'path',
+        pathLen,
+        hashSize,
+        pathHashesHex: payload.subarray(1, 1 + pathByteLen).toString('hex'),
+        extraType: payload[1 + pathByteLen],
+        extraHex: payload.subarray(1 + pathByteLen + 1).toString('hex'),
+      };
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
