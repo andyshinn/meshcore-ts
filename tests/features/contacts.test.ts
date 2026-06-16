@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   decodeAdvert,
   decodeContact,
@@ -12,6 +12,8 @@ import {
   encodeRemoveContact,
   encodeResetPath,
 } from '../../src/features/contacts';
+import type { Contact } from '../../src/index';
+import { deliver, makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');
 const pk = 'aa'.repeat(32);
@@ -136,5 +138,144 @@ describe('contacts decoders', () => {
     const frame = Buffer.concat([Buffer.from([0x8f]), Buffer.alloc(32, 0x22)]);
     expect(decodeContactDeleted(frame)).toBe('22'.repeat(32));
     expect(decodeContactDeleted(Buffer.alloc(32))).toBeNull();
+  });
+
+  it('decodeContact with outPathLen=0xFF returns outPathHex="" (flood/unknown)', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x33).copy(frame, 1);
+    frame[33] = 1; // type chat
+    frame[34] = 0;
+    frame[35] = 0xff; // flood sentinel
+    // Fill the path region with non-zero garbage to prove it is not read.
+    frame.fill(0xab, 36, 100);
+    Buffer.from('Flood', 'utf8').copy(frame, 100);
+    const c = decodeContact(frame);
+    expect(c?.outPathLen).toBe(0xff);
+    expect(c?.outPathHex).toBe('');
+  });
+
+  it('decodeContact clamps a corrupt outPathLen (>64) to 64 bytes, not beyond', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x44).copy(frame, 1);
+    frame[33] = 1;
+    frame[34] = 0;
+    frame[35] = 100; // corrupt: claims 100 bytes but the region is only 64 (frame[36..99])
+    // Fill path region with a known pattern so we can verify the slice length.
+    frame.fill(0xcc, 36, 100); // 64 bytes of 0xcc
+    const c = decodeContact(frame);
+    expect(c?.outPathHex).toBe('cc'.repeat(64)); // clamped to 64, not 100
+  });
+
+  it('decodeContact with a normal outPathLen still decodes correctly', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x55).copy(frame, 1);
+    frame[33] = 1;
+    frame[34] = 0;
+    frame[35] = 3; // normal 3-byte path
+    Buffer.from([0x01, 0x02, 0x03]).copy(frame, 36);
+    const c = decodeContact(frame);
+    expect(c?.outPathLen).toBe(3);
+    expect(c?.outPathHex).toBe('010203');
+  });
+});
+
+// Helper: build a full 148-byte RESP_CONTACT frame for a known pubkey.
+function contactFrame(pubkeyHex: string, name: string, outPathLen = 0xff): Buffer {
+  const frame = Buffer.alloc(148);
+  frame[0] = 0x03; // RESP_CONTACT
+  Buffer.from(pubkeyHex, 'hex').copy(frame, 1);
+  frame[33] = 1; // type = chat
+  frame[35] = outPathLen;
+  Buffer.from(name, 'utf8').copy(frame, 100);
+  return frame;
+}
+
+describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('sends CMD_GET_CONTACT_BY_KEY after the debounce when a known contact re-advertises', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    try {
+      // Seed a known contact so the PUSH_ADVERT handler finds it.
+      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      session.state.upsertContact(contact);
+
+      // Deliver PUSH_ADVERT [0x80][pubkey].
+      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+      deliver(transport, advertFrame);
+
+      // Before the debounce fires, no refresh command should have been sent.
+      const sentBeforeDebounce = transport.sent.length;
+
+      // Advance past the 50ms debounce.
+      await vi.advanceTimersByTimeAsync(100);
+
+      // CMD_GET_CONTACT_BY_KEY (0x1e) must have been sent for this pubkey.
+      const refreshFrames = transport.sent.slice(sentBeforeDebounce);
+      expect(refreshFrames.length).toBeGreaterThan(0);
+      const lastSent = refreshFrames.at(-1);
+      expect(lastSent).toBeDefined();
+      const lastFrame = Buffer.from(lastSent ?? []);
+      expect(lastFrame[0]).toBe(0x1e); // CMD_GET_CONTACT_BY_KEY
+      expect(lastFrame.subarray(1, 33).toString('hex')).toBe(pk);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('de-duplicates: a burst of PUSH_ADVERTs for the same contact fires only one refresh', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    try {
+      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      session.state.upsertContact(contact);
+
+      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+      const sentBefore = transport.sent.length;
+
+      // Deliver three adverts in rapid succession (within the debounce window).
+      deliver(transport, advertFrame);
+      deliver(transport, advertFrame);
+      deliver(transport, advertFrame);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Exactly one CMD_GET_CONTACT_BY_KEY should have been enqueued.
+      const refreshFrames = transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e);
+      expect(refreshFrames).toHaveLength(1);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('PUSH_ADVERT refresh: ingests the updated contact record when the radio replies', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    try {
+      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      session.state.upsertContact(contact);
+
+      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+      deliver(transport, advertFrame);
+
+      const sentBefore = transport.sent.length;
+      await vi.advanceTimersByTimeAsync(100); // fire the refresh timer
+
+      // The GET_CONTACT_BY_KEY was sent; reply with an updated name.
+      const reply = contactFrame(pk, 'Alice-Updated');
+      deliver(transport, reply);
+      await vi.runAllTimersAsync();
+
+      // The updated name should now be reflected in local state.
+      const updated = session.state.getContacts().find((c) => c.key === `c:${pk}`);
+      expect(updated?.name).toBe('Alice-Updated');
+      void sentBefore; // silence unused-var lint
+    } finally {
+      session.stop();
+    }
   });
 });

@@ -139,7 +139,9 @@ export function decodeContact(frame: Buffer): ContactRecord | null {
   const type = frame[33];
   const flags = frame[34];
   const outPathLen = frame[35];
-  const outPathHex = frame.subarray(36, 36 + outPathLen).toString('hex');
+  // 0xFF means flood/unknown — no path bytes. Clamp corrupt values (65..254) to
+  // the 64-byte region so we never read past frame[99].
+  const outPathHex = outPathLen === 0xff ? '' : frame.subarray(36, 36 + Math.min(outPathLen, 64)).toString('hex');
   const nameRegion = frame.subarray(100, 132);
   const firstNull = nameRegion.indexOf(0);
   const nameBytes = firstNull === -1 ? nameRegion : nameRegion.subarray(0, firstNull);
@@ -204,10 +206,21 @@ export interface ContactsIterRuntime {
   syncSeen: string[];
   resyncTimer: ReturnType<typeof setTimeout> | null;
   pendingContactByKey: PendingContactByKey[];
+  /** Per-pubkey debounce timers for scheduled single-contact refreshes. Keyed
+   *  by publicKeyHex. Prevents a burst of PUSH_ADVERT / PUSH_PATH_UPDATED for
+   *  the same contact from spamming CMD_GET_CONTACT_BY_KEY. */
+  refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
 }
 
 export function createContactsIterRuntime(): ContactsIterRuntime {
-  return { iterTotal: 0, iterCount: 0, syncSeen: [], resyncTimer: null, pendingContactByKey: [] };
+  return {
+    iterTotal: 0,
+    iterCount: 0,
+    syncSeen: [],
+    resyncTimer: null,
+    pendingContactByKey: [],
+    refreshTimers: new Map(),
+  };
 }
 
 // ---- Ingest / app-logic ------------------------------------------------
@@ -244,6 +257,40 @@ export function scheduleContactsResync(ctx: FeatureContext): void {
       ctx.log.warn(`contacts re-sync failed: ${(err as Error).message}`);
     });
   }, 1500);
+}
+
+/** Debounced single-contact refresh (CMD_GET_CONTACT_BY_KEY) after a
+ *  PUSH_ADVERT or PUSH_PATH_UPDATED for a known contact. The firmware updates
+ *  its in-memory record (name/gps/flags on advert; out_path on path-updated)
+ *  but only pushes the 32-byte pubkey, so we re-fetch the full record and
+ *  ingest it so the updated fields are visible without waiting for a full sync.
+ *
+ *  Non-blocking: the fetch is fire-and-forget (no await in the frame handler).
+ *  De-duplicated: a per-pubkey debounce timer ensures a burst of pushes for
+ *  the same contact fires only one request. A second pending lookup for the
+ *  same pubkey is also suppressed when one is already in flight. */
+export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string): void {
+  // If there's already a pending in-flight lookup for this pubkey, skip — the
+  // arriving RESP_CONTACT will be consumed by resolvePendingContactByKey and
+  // then ingested below.
+  if (ctx.rt.contactsIter.pendingContactByKey.some((e) => e.publicKeyHex === publicKeyHex)) return;
+  // Debounce: if a refresh is already scheduled for this pubkey, let it fire.
+  if (ctx.rt.contactsIter.refreshTimers.has(publicKeyHex)) return;
+  const timer = setTimeout(() => {
+    ctx.rt.contactsIter.refreshTimers.delete(publicKeyHex);
+    // Fire-and-forget: fetch the single contact and ingest the updated record.
+    getContactByKey(ctx, publicKeyHex)
+      .then((record) => {
+        if (record) {
+          ingestContact(ctx, record, 'sync');
+          ctx.log.debug(`refreshed contact ${publicKeyHex.slice(0, 12)} after push`);
+        }
+      })
+      .catch((err) => {
+        ctx.log.warn(`contact refresh failed for ${publicKeyHex.slice(0, 12)}: ${(err as Error).message}`);
+      });
+  }, 50);
+  ctx.rt.contactsIter.refreshTimers.set(publicKeyHex, timer);
 }
 
 /** Upsert a contact from a RESP_CONTACT / PUSH_NEW_ADVERT frame. When the
@@ -357,6 +404,10 @@ export function resetContactsIter(ctx: FeatureContext): void {
       entry.resolve(null);
     }
   }
+  for (const timer of ctx.rt.contactsIter.refreshTimers.values()) {
+    clearTimeout(timer);
+  }
+  ctx.rt.contactsIter.refreshTimers.clear();
 }
 
 // ---- getContactByKey correlation ---------------------------------------
@@ -485,6 +536,9 @@ export const contactsFeature: Feature = {
       // A known contact re-advertised — touch its last-seen so the UI reflects
       // liveness. The bare push carries only the pubkey (no timestamp), so we
       // record the moment we heard it.
+      // Then schedule a non-blocking re-fetch of the full contact record so any
+      // firmware-side updates (name, GPS, flags) become visible without waiting
+      // for the next full GET_CONTACTS sync.
       const pubkeyHex = decodeAdvert(frame);
       if (pubkeyHex) {
         const existing = ctx.state.getContacts().find((c) => c.key === `c:${pubkeyHex}`);
@@ -492,6 +546,7 @@ export const contactsFeature: Feature = {
           ctx.state.upsertContact({ ...existing, lastSeenMs: Date.now() });
           ctx.events.emit('contacts', ctx.state.getContacts());
           ctx.log.trace(`re-advert: touched ${pubkeyHex.slice(0, 12)}`);
+          scheduleContactRefresh(ctx, pubkeyHex);
         }
       }
       return;

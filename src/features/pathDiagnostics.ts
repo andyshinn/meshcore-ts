@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { CMD, PUSH, RESP } from '../codes';
 import { ProtocolError } from '../errors';
 import type { Feature, FeatureContext } from '../feature';
+import { scheduleContactRefresh } from './contacts';
 
 // Path diagnostics (firmware: companion_radio/MyMesh.cpp). Two queries plus a
 // liveness push:
@@ -193,7 +194,9 @@ export const pathDiagnosticsFeature: Feature = {
     if (code === PUSH.PATH_UPDATED) {
       // The radio updated a contact's path (no path bytes inline). Touch the
       // known contact's last-seen so the UI reflects liveness, mirroring the
-      // PUSH_ADVERT handling. The fresh path lands on the next contacts sync.
+      // PUSH_ADVERT handling. Then schedule a non-blocking re-fetch of the full
+      // contact record so the updated out_path becomes visible without waiting
+      // for the next full GET_CONTACTS sync.
       const pubkeyHex = decodePathUpdated(frame);
       if (pubkeyHex) {
         const existing = ctx.state.getContacts().find((c) => c.key === `c:${pubkeyHex}`);
@@ -201,6 +204,7 @@ export const pathDiagnosticsFeature: Feature = {
           ctx.state.upsertContact({ ...existing, lastSeenMs: Date.now() });
           ctx.events.emit('contacts', ctx.state.getContacts());
           ctx.log.trace(`path updated: touched ${pubkeyHex.slice(0, 12)}`);
+          scheduleContactRefresh(ctx, pubkeyHex);
         }
       }
       return;
