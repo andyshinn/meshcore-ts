@@ -81,6 +81,27 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
         cipherLen: payload.length - 3,
       };
     }
+    case PAYLOAD_TYPE.REQ:
+    case PAYLOAD_TYPE.RESPONSE: {
+      if (payload.length < 4) break;
+      const fields = {
+        destHash: payload.subarray(0, 1).toString('hex'),
+        srcHash: payload.subarray(1, 2).toString('hex'),
+        macHex: payload.subarray(2, 4).toString('hex'),
+        cipherLen: payload.length - 4,
+      };
+      return header.payloadType === PAYLOAD_TYPE.REQ ? { kind: 'req', ...fields } : { kind: 'response', ...fields };
+    }
+    case PAYLOAD_TYPE.ANON_REQ: {
+      if (payload.length < 35) break;
+      return {
+        kind: 'anonReq',
+        destHash: payload.subarray(0, 1).toString('hex'),
+        senderPubKeyHex: payload.subarray(1, 33).toString('hex'),
+        macHex: payload.subarray(33, 35).toString('hex'),
+        cipherLen: payload.length - 35,
+      };
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
