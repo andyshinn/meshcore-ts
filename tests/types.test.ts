@@ -63,6 +63,7 @@ describe('DEFAULT_AUTO_ADD_CONFIG', () => {
       sensor: true,
       overwriteOldest: true,
       maxHops: null,
+      radioMaxHops: 0,
     });
   });
 
@@ -74,6 +75,7 @@ describe('DEFAULT_AUTO_ADD_CONFIG', () => {
       'maxHops',
       'mode',
       'overwriteOldest',
+      'radioMaxHops',
       'repeater',
       'room',
       'sensor',

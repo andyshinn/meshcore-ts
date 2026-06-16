@@ -226,6 +226,8 @@ export interface AutoAddConfig {
   /** App-side filter: drop adverts whose path has more hops than this. `null`
    *  = no limit. The radio doesn't apply this; the companion does pre-upsert. */
   maxHops: number | null;
+  /** Radio-side firmware autoadd_max_hops; 0 = no limit. Distinct from the app-side `maxHops` advert filter. */
+  radioMaxHops: number;
 }
 export const DEFAULT_AUTO_ADD_CONFIG: AutoAddConfig = {
   mode: 'all',
@@ -235,6 +237,7 @@ export const DEFAULT_AUTO_ADD_CONFIG: AutoAddConfig = {
   sensor: true,
   overwriteOldest: true,
   maxHops: null,
+  radioMaxHops: 0,
 };
 
 /** Telemetry/messaging knobs from CMD_SET_OTHER_PARAMS. Each telemetry mode is
