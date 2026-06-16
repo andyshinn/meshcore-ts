@@ -14,7 +14,22 @@ describe('customVars encode/decode', () => {
     expect(hex(encodeSetCustomVar('gps', true))).toBe('296770733a31');
   });
 
-  it('decodeCustomVars parses newline-separated key:value pairs', () => {
+  it('decodeCustomVars parses comma-separated key:value pairs (firmware format)', () => {
+    const frame = Buffer.concat([Buffer.from([0x15]), Buffer.from('gps:1,gps_interval:60', 'utf8')]);
+    expect(decodeCustomVars(frame)).toEqual({ gps: '1', gps_interval: '60' });
+  });
+
+  it('decodeCustomVars parses a single key:value entry', () => {
+    const frame = Buffer.concat([Buffer.from([0x15]), Buffer.from('gps:1', 'utf8')]);
+    expect(decodeCustomVars(frame)).toEqual({ gps: '1' });
+  });
+
+  it('decodeCustomVars preserves colons in values (only first colon is the separator)', () => {
+    const frame = Buffer.concat([Buffer.from([0x15]), Buffer.from('url:http://localhost:8080', 'utf8')]);
+    expect(decodeCustomVars(frame)).toEqual({ url: 'http://localhost:8080' });
+  });
+
+  it('decodeCustomVars tolerates legacy newline-separated entries', () => {
     const frame = Buffer.concat([Buffer.from([0x15]), Buffer.from('gps:1\ngps_interval:30', 'utf8')]);
     expect(decodeCustomVars(frame)).toEqual({ gps: '1', gps_interval: '30' });
   });

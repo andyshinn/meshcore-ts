@@ -22,15 +22,15 @@ export function encodeSetCustomVar(key: string, value: string | number | boolean
   return out;
 }
 
-// RESP_CUSTOM_VARS: newline-separated "key:value" pairs. The firmware may also
-// use a NUL between entries on some older builds — we split on both to stay
-// compatible.
+// RESP_CUSTOM_VARS: comma-separated "key:value" pairs (firmware MyMesh.cpp).
+// Example payload: "gps:1,gps_interval:60". For tolerance toward any legacy
+// builds that emit newline or NUL separators we also split on those.
 export function decodeCustomVars(frame: Buffer): Record<string, string> {
   if (frame.length < 2) return {};
   const text = frame.subarray(1).toString('utf8');
   const out: Record<string, string> = {};
-  for (const line of text.split(/[\n\0]/)) {
-    const trimmed = line.trim();
+  for (const entry of text.split(/[,\n\0]/)) {
+    const trimmed = entry.trim();
     if (!trimmed) continue;
     const colon = trimmed.indexOf(':');
     if (colon === -1) continue;
