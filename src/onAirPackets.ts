@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { Advert } from './advert';
+import { type Advert, parseAdvert } from './advert';
 import { type MeshPacketHeader, PAYLOAD_TYPE, parseMeshPacket } from './meshPacket';
 
 /** A structurally-decoded MeshCore on-air packet. `header` is null when the
@@ -57,6 +57,11 @@ export function decodeOnAirPacket(input: string | Uint8Array): OnAirPacket {
 function decodePayload(header: MeshPacketHeader): OnAirPayload {
   const payload = header.payload;
   switch (header.payloadType) {
+    case PAYLOAD_TYPE.ADVERT: {
+      const advert = parseAdvert(payload);
+      if (advert) return { kind: 'advert', advert };
+      break;
+    }
     // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
