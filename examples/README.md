@@ -30,6 +30,7 @@ Finding your serial port:
 | `parse-packet.ts` | no | Parse raw mesh-packet bytes |
 | `parse-advert.ts` | no | Parse an advert from a `meshcore://` URL |
 | `get-contacts.ts` | serial | List the device's contacts |
+| `get-device-info.ts` | serial | Print device + radio info (firmware, model, battery, LoRa params) |
 | `send-contact-message.ts <port> <name> [text]` | serial | DM a contact found by name |
 | `send-channel-message.ts <port> <channel> [text]` | serial | Post to a channel found by name |
 | `echo-bot.ts` | serial | Echo every incoming DM back to the sender |
