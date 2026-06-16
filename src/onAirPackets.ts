@@ -162,7 +162,6 @@ function decodePayload(header: MeshPacketHeader): OnAirPayload {
       }
       return { kind: 'controlOther', rawFlags, payloadHex: payload.toString('hex') };
     }
-    // Payload-type cases are inserted above this line by later tasks.
     default:
       break;
   }
