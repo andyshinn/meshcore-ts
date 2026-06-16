@@ -399,6 +399,15 @@ export class MeshCoreSession {
     const fullHex = frame.toString('hex');
     const fullBytes = [...frame];
     if (parsed.kind === 'mesh') {
+      // Surface the raw on-air bytes to consumers (e.g. a packet inspector)
+      // before the internal observation tee. Fires for both sources; only
+      // log_rx (0x88) bytes are reliably structurally decodable downstream.
+      this.events.emit('rawPacket', {
+        hex: parsed.meshHex,
+        source: parsed.source,
+        snr: parsed.snr,
+        rssi: parsed.rssi,
+      });
       // PUSH_CODE_LOG_RX_DATA (0x88) carries the raw on-air mesh packet,
       // including the per-hop path bytes our PathViewer renders. Decode it
       // here and tee the observation into the side-channel buffer so the

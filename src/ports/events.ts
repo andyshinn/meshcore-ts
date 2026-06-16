@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { DiscoveredContact } from '../contacts/discovered';
+import type { MeshSource } from '../frame';
 import type {
   AutoAddConfig,
   Channel,
@@ -31,6 +32,7 @@ import type {
  */
 export interface MeshCoreEventMap {
   transportState: (s: TransportState) => void;
+  rawPacket: (pkt: { hex: string; source: MeshSource; snr: number; rssi: number }) => void;
   channels: (channels: Channel[]) => void;
   channelPresence: (keys: string[]) => void;
   syncProgress: (progress: SyncProgress) => void;
