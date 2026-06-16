@@ -14,16 +14,16 @@ async function flushUntil(predicate: () => boolean, maxTicks = 100): Promise<voi
 
 // ---- Frame builders --------------------------------------------------------
 
-/** Build a minimal RESP_SELF_INFO frame (0x05).
- *  Layout: [0x05][adv_type u8][tx_power u8][max_tx_power u8][pubkey 32B][name UTF-8]
- *  decodeSelfInfo scans backwards from end for printable ASCII to extract name. */
+/** Build a RESP_SELF_INFO frame (0x05) with the real firmware layout.
+ *  [0]code [1]adv_type [2]tx_power [3]max_tx_power [4..35]pubkey [36..43]lat/lon
+ *  [44]multi_acks [45]advert_loc_policy [46]telemetry_mode [47]manual_add
+ *  [48..51]freq [52..55]bw [56]sf [57]cr [58..]name UTF-8 (fixed 58-byte header). */
 function buildSelfInfoFrame(name: string, pkHex: string): Buffer {
   const nameBytes = Buffer.from(name, 'utf8');
-  const f = Buffer.alloc(4 + 32 + nameBytes.length);
+  const f = Buffer.alloc(58 + nameBytes.length);
   f[0] = 0x05;
-  // bytes 1..3: adv_type, tx_power, max_tx_power — left as 0
   Buffer.from(pkHex, 'hex').copy(f, 4);
-  nameBytes.copy(f, 36);
+  nameBytes.copy(f, 58);
   return f;
 }
 

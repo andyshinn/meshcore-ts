@@ -3,15 +3,64 @@ import { CMD, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
 import type { Owner } from '../types';
 
-// RESP_SELF_INFO [0x05][adv_type u8][tx_power u8][max_tx_power u8]
-//   [public_key 32B][...adv lat/lon + radio params, firmware-version-specific...]
-//   [name, trailing printable ASCII]. We only surface the two fields the
-//   identity card needs — the 32B pubkey at a fixed offset and the name via the
-//   same trailing-printable scan parseNodeNameFromSelfInfo / decodeDeviceInfo use,
-//   which is firmware-version tolerant.
+// RESP_SELF_INFO frame layout (MyMesh.cpp:1038-1070):
+//   [0]      code 0x05
+//   [1]      adv_type (u8)
+//   [2]      tx_power_dbm (i8, signed)
+//   [3]      max_lora_tx_power (u8)
+//   [4..35]  pub_key (32 bytes)
+//   [36..39] lat (i32 LE, degrees × 1_000_000)
+//   [40..43] lon (i32 LE, degrees × 1_000_000)
+//   [44]     multi_acks (u8)
+//   [45]     advert_loc_policy (u8)
+//   [46]     telemetry_mode (u8) = (env<<4)|(loc<<2)|base  (each 2 bits, 0..3)
+//   [47]     manual_add_contacts (u8)
+//   [48..51] freq (u32 LE) — wire value is kHz (e.g. 915000 = 915 MHz)
+//   [52..55] bw   (u32 LE) — wire value is Hz  (e.g. 250000 = 250 kHz)
+//   [56]     sf (u8)
+//   [57]     cr (u8)
+//   [58..]   node_name (UTF-8, no null terminator, runs to end of frame)
 export interface SelfInfo {
   name: string;
   publicKeyHex: string;
+  /** Advertisement type byte (frame[1]). */
+  advType: number;
+  /** TX power in dBm, signed (frame[2]). */
+  txPowerDbm: number;
+  /** Maximum LoRa TX power in dBm (frame[3]). */
+  maxTxPowerDbm: number;
+  /** Latitude in decimal degrees (readInt32LE(36) / 1_000_000). */
+  latDeg: number;
+  /** Longitude in decimal degrees (readInt32LE(40) / 1_000_000). */
+  lonDeg: number;
+  /** Multi-ACK setting (frame[44]). */
+  multiAcks: number;
+  /** Advertise location policy (frame[45]). */
+  advertLocPolicy: number;
+  /** Telemetry mode — environment component, bits [5:4] of frame[46], 0..3. */
+  telemetryModeEnv: number;
+  /** Telemetry mode — location component, bits [3:2] of frame[46], 0..3. */
+  telemetryModeLoc: number;
+  /** Telemetry mode — base component, bits [1:0] of frame[46], 0..3. */
+  telemetryModeBase: number;
+  /** Manual add contacts flag (frame[47]). */
+  manualAddContacts: number;
+  /**
+   * Radio frequency in kHz (readUInt32LE(48)).
+   * The firmware sends prefs.freq * 1000 so the wire value is already kHz
+   * (e.g. 915000 = 915 MHz).
+   */
+  freqKhz: number;
+  /**
+   * Radio bandwidth in Hz (readUInt32LE(52)).
+   * The firmware sends prefs.bw * 1000 so the wire value is already Hz
+   * (e.g. 250000 = 250 kHz).
+   */
+  bwHz: number;
+  /** LoRa spreading factor (frame[56]). */
+  sf: number;
+  /** LoRa coding rate (frame[57]). */
+  cr: number;
 }
 
 // CMD_APP_START payload (per src/main/bridge/identity.ts):
@@ -27,16 +76,40 @@ export function encodeAppStart(appName: string, version = 1): Buffer {
 }
 
 export function decodeSelfInfo(frame: Buffer): SelfInfo | null {
-  if (frame.length < 36 || frame[0] !== 0x05) return null;
+  // Fixed header is 58 bytes; name may be empty but the header must be present.
+  if (frame.length < 58 || frame[0] !== 0x05) return null;
+
   const publicKeyHex = frame.subarray(4, 36).toString('hex');
-  let start = frame.length;
-  while (start > 36) {
-    const b = frame[start - 1];
-    if (b >= 0x20 && b < 0x7f) start -= 1;
-    else break;
-  }
-  const name = frame.subarray(start).toString('utf8').trim();
-  return { name, publicKeyHex };
+
+  const latDeg = frame.readInt32LE(36) / 1_000_000;
+  const lonDeg = frame.readInt32LE(40) / 1_000_000;
+
+  const telemetryByte = frame[46];
+  const telemetryModeEnv = (telemetryByte >> 4) & 0x03;
+  const telemetryModeLoc = (telemetryByte >> 2) & 0x03;
+  const telemetryModeBase = telemetryByte & 0x03;
+
+  const name = frame.subarray(58).toString('utf8');
+
+  return {
+    name,
+    publicKeyHex,
+    advType: frame[1],
+    txPowerDbm: frame.readInt8(2),
+    maxTxPowerDbm: frame[3],
+    latDeg,
+    lonDeg,
+    multiAcks: frame[44],
+    advertLocPolicy: frame[45],
+    telemetryModeEnv,
+    telemetryModeLoc,
+    telemetryModeBase,
+    manualAddContacts: frame[47],
+    freqKhz: frame.readUInt32LE(48),
+    bwHz: frame.readUInt32LE(52),
+    sf: frame[56],
+    cr: frame[57],
+  };
 }
 
 /** Decode RESP_SELF_INFO, publish the radio identity as the app Owner, and

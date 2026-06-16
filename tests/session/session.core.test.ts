@@ -8,10 +8,16 @@ import { MeshCoreSession } from '../../src/session/session';
 // decodeSelfInfo reads the pubkey at bytes 4..36 and scans the trailing
 // printable ASCII for the name.
 function selfInfoFrame(pubKeyHex: string, name: string): Uint8Array {
-  const head = Buffer.from([0x05, 0x00, 0x00, 0x00]);
-  const pub = Buffer.from(pubKeyHex, 'hex');
+  // RESP_SELF_INFO fixed header is 58 bytes; node_name follows at offset 58.
+  // [0]code [1]adv_type [2]tx_power [3]max_tx_power [4..35]pubkey [36..43]lat/lon
+  // [44]multi_acks [45]advert_loc_policy [46]telemetry_mode [47]manual_add
+  // [48..51]freq [52..55]bw [56]sf [57]cr [58..]name.
   const nameBytes = Buffer.from(name, 'utf8');
-  return Uint8Array.from(Buffer.concat([head, pub, nameBytes]));
+  const f = Buffer.alloc(58 + nameBytes.length);
+  f[0] = 0x05;
+  Buffer.from(pubKeyHex, 'hex').copy(f, 4);
+  nameBytes.copy(f, 58);
+  return Uint8Array.from(f);
 }
 
 // RESP_OK is code 0x00.
