@@ -1,10 +1,10 @@
 import { Buffer } from 'node:buffer';
 import { CMD, type STATS_TYPE } from './codes';
 
-// PUSH_LOGIN_SUCCESS (firmware: companion_radio/MyMesh.cpp:669-685). Two
+// PUSH_LOGIN_SUCCESS (firmware: companion_radio/MyMesh.cpp:676-700). Two
 // shapes exist on the wire:
 //   - Legacy: [0x85][0 is_admin][6B pubkey prefix]                       (8B)
-//   - v6+:    [0x85][perms u8][6B prefix][tag u32 LE][acl_perms u8][fw_ver u8] (15B)
+//   - v6+:    [0x85][perms u8][6B prefix][tag u32 LE][acl_perms u8][fw_ver u8] (14B)
 // The longer form is the one current firmware sends; we tolerate the short
 // form so older repeaters still parse.
 export interface LoginSuccess {
@@ -20,17 +20,16 @@ export function parseLoginSuccess(frame: Buffer): LoginSuccess | null {
   if (frame.length < 8) return null;
   const permissions = frame[1];
   const pubKeyPrefixHex = frame.subarray(2, 8).toString('hex');
-  if (frame.length >= 15) {
+  if (frame.length >= 14) {
     return {
       permissions,
       pubKeyPrefixHex,
       serverTagHex: frame.subarray(8, 12).toString('hex'),
       aclPermissions: frame[12],
       firmwareVerLevel: frame[13],
-      // Firmware sets permissions == data[6] from the remote response; the
-      // ACL_ADMIN bit lives in aclPermissions (data[7]). Treat either being
-      // set as admin so legacy + new shapes both work.
-      isAdmin: (permissions & 0x01) !== 0 || (frame[12] & 0x01) !== 0,
+      // Firmware defines PERM_ACL_ADMIN = 3 (0b11) and PERM_ACL_READ_ONLY = 1.
+      // Read-only (0x01) must NOT be treated as admin; admin requires both bits set.
+      isAdmin: (permissions & 0x01) !== 0 || (frame[12] & 0x03) === 0x03,
     };
   }
   return {
@@ -89,11 +88,20 @@ export function parseBinaryResponse(frame: Buffer): BinaryResponse | null {
   };
 }
 
-// PUSH_TRACE_DATA frame layout, firmware MyMesh.cpp:812-825. The path-hash
-// size is encoded in flags bits 0..1; per-hop SNR bytes follow the hashes,
-// then a trailing "final SNR" byte for the last leg.
+// PUSH_TRACE_DATA frame layout, firmware MyMesh.cpp:820-834.
+//
+//   [0]    code 0x89
+//   [1]    reserved (0)
+//   [2]    path_len  (u8) — TOTAL BYTES in the path_hashes block
+//   [3]    flags     (u8) — bits 0..1 encode per-hop hash size: bytesPerHash = 1 << (flags & 0x03)
+//   [4..7] tag       (u32 LE)
+//   [8..11] auth_code(u32 LE)
+//   [12 .. 12+path_len-1]        path_hashes (path_len bytes)
+//   [12+path_len .. +hopCount-1] path_snrs   (hopCount bytes, each i8 = snr×4)
+//   [12+path_len+hopCount]       final SNR   (i8 = snr×4, "to this node")
+//
+// hopCount = path_len / bytesPerHash.  There is NO pubkey-prefix field.
 export interface TraceData {
-  pubKeyPrefixHex: string;
   tagHex: string;
   authHex: string;
   flags: number;
@@ -103,26 +111,24 @@ export interface TraceData {
 }
 
 export function parseTraceData(frame: Buffer): TraceData | null {
-  if (frame.length < 12) return null;
-  const pubKeyPrefixHex = frame.subarray(2, 8).toString('hex');
-  const pathLen = frame[8];
-  const flags = frame[9];
+  // Minimum frame: header(12) + at least 1 SNR byte even with empty path = 13
+  if (frame.length < 13) return null;
+  const pathLen = frame[2];
+  const flags = frame[3];
   const pathHashSize = 1 << (flags & 0x03);
-  const tagHex = frame.subarray(10, 14).toString('hex');
-  if (frame.length < 18) return null;
-  const authHex = frame.subarray(14, 18).toString('hex');
-  const hashesStart = 18;
-  if (frame.length < hashesStart + pathLen) return null;
-  const hopCount = pathHashSize > 0 ? Math.floor(pathLen / pathHashSize) : 0;
-  const snrsStart = hashesStart + pathLen;
-  if (frame.length < snrsStart + hopCount + 1) return null;
+  const tagHex = frame.subarray(4, 8).toString('hex');
+  const authHex = frame.subarray(8, 12).toString('hex');
+  const hopCount = Math.floor(pathLen / pathHashSize);
+  // Guard: need 12 header bytes + pathLen hash bytes + hopCount SNR bytes + 1 final SNR byte
+  if (frame.length < 12 + pathLen + hopCount + 1) return null;
   const hops: Array<{ hashHex: string; snrDb: number }> = [];
-  for (let i = 0; i < hopCount; i += 1) {
-    const hash = frame.subarray(hashesStart + i * pathHashSize, hashesStart + (i + 1) * pathHashSize);
-    hops.push({ hashHex: hash.toString('hex'), snrDb: frame.readInt8(snrsStart + i) / 4 });
+  const snrBase = 12 + pathLen;
+  for (let k = 0; k < hopCount; k += 1) {
+    const hashHex = frame.subarray(12 + k * pathHashSize, 12 + (k + 1) * pathHashSize).toString('hex');
+    hops.push({ hashHex, snrDb: frame.readInt8(snrBase + k) / 4 });
   }
-  const finalSnrDb = frame.readInt8(snrsStart + hopCount) / 4;
-  return { pubKeyPrefixHex, tagHex, authHex, flags, pathHashSize, hops, finalSnrDb };
+  const finalSnrDb = frame.readInt8(snrBase + hopCount) / 4;
+  return { tagHex, authHex, flags, pathHashSize, hops, finalSnrDb };
 }
 
 // ACL list response body (inside PUSH_BINARY_RESPONSE payload, after the 4B

@@ -369,9 +369,13 @@ export const STATS_TYPE = {
   PACKETS: 0x02,
 } as const;
 
-// Permission bits returned in PUSH_LOGIN_SUCCESS byte 7 (ACL permissions).
+// ACL role, encoded in the low 2 bits of the permissions byte (PUSH_LOGIN_SUCCESS
+// byte 12 / ACL list entries). Values mirror firmware helpers/ClientACL.h, where
+// `isAdmin() == ((permissions & ACL_ROLE_MASK) == ACL_ADMIN)`.
 export const PERM_BITS = {
-  ACL_ADMIN: 0x01,
-  ACL_GUEST: 0x02,
+  ACL_GUEST: 0x00,
+  ACL_READ_ONLY: 0x01,
+  ACL_READ_WRITE: 0x02,
+  ACL_ADMIN: 0x03,
   ACL_ROLE_MASK: 0x03,
 } as const;

@@ -11,8 +11,10 @@ import {
   buildSendTelemetryReq,
   buildSendTracePath,
   parseAvgMinMax,
+  parseLoginSuccess,
   parseStatusResponse,
   parseTelemetryResponse,
+  parseTraceData,
 } from '../src/repeater';
 
 const hex = (b: Buffer) => b.toString('hex');
@@ -223,5 +225,246 @@ describe('parseAvgMinMax', () => {
     expect(res?.nowUnix).toBe(500);
     expect(res?.series[0]).toMatchObject({ channel: 1, name: 'Temperature', unit: '°C', min: 20, max: 30, avg: 25 });
     expect(res?.series[1]).toMatchObject({ channel: 2, name: 'Humidity', unit: '%', min: 40, max: 60, avg: 50 });
+  });
+});
+
+// ---- FIX A: parseTraceData (PUSH 0x89) --------------------------------
+// Wire layout (no pubkey-prefix field):
+//   [0]    0x89
+//   [1]    reserved
+//   [2]    path_len (u8)
+//   [3]    flags (u8) — bits 0..1 = log2(bytesPerHash)
+//   [4..7] tag (u32 LE)
+//   [8..11] auth_code (u32 LE)
+//   [12..12+path_len-1]       path_hashes
+//   [12+path_len..+hopCount-1] per-hop SNRs (i8, × 4)
+//   [12+path_len+hopCount]    final SNR (i8, × 4)
+
+describe('parseTraceData (FIX A — correct wire layout)', () => {
+  // Helper: build a well-formed TRACE_DATA frame from first principles.
+  function buildTraceFrame(opts: {
+    tag: number;
+    authCode: number;
+    flags: number;
+    hashes: Buffer[]; // one Buffer per hop; all must be pathHashSize bytes
+    snrs: number[]; // per-hop SNR in dB (will be multiplied by 4 and stored as i8)
+    finalSnr: number; // final SNR in dB
+  }): Buffer {
+    const bytesPerHash = 1 << (opts.flags & 0x03);
+    const hopCount = opts.hashes.length;
+    const pathLen = hopCount * bytesPerHash;
+    // header(12) + hashes(pathLen) + per-hop SNRs(hopCount) + final SNR(1)
+    const frame = Buffer.alloc(12 + pathLen + hopCount + 1);
+    frame[0] = 0x89;
+    frame[1] = 0x00; // reserved
+    frame[2] = pathLen;
+    frame[3] = opts.flags;
+    frame.writeUInt32LE(opts.tag >>> 0, 4);
+    frame.writeUInt32LE(opts.authCode >>> 0, 8);
+    let off = 12;
+    for (const h of opts.hashes) {
+      h.copy(frame, off);
+      off += bytesPerHash;
+    }
+    for (let i = 0; i < hopCount; i += 1) {
+      frame.writeInt8(Math.round(opts.snrs[i] * 4), off + i);
+    }
+    frame.writeInt8(Math.round(opts.finalSnr * 4), off + hopCount);
+    return frame;
+  }
+
+  it('parses a 2-hop trace with 1-byte hashes (flags=0x00)', () => {
+    const tag = 0xdeadbeef;
+    const authCode = 0xcafe1234;
+    const frame = buildTraceFrame({
+      tag,
+      authCode,
+      flags: 0x00, // bytesPerHash = 1
+      hashes: [Buffer.from([0xaa]), Buffer.from([0xbb])],
+      snrs: [5.5, -2.25],
+      finalSnr: 7.0,
+    });
+
+    const res = parseTraceData(frame);
+    expect(res).not.toBeNull();
+
+    // tagHex must equal the LE encoding used by resolveTag
+    const expectedTagHex = Buffer.alloc(4);
+    expectedTagHex.writeUInt32LE(tag >>> 0, 0);
+    expect(res?.tagHex).toBe(expectedTagHex.toString('hex'));
+
+    const expectedAuthHex = Buffer.alloc(4);
+    expectedAuthHex.writeUInt32LE(authCode >>> 0, 0);
+    expect(res?.authHex).toBe(expectedAuthHex.toString('hex'));
+
+    expect(res?.flags).toBe(0x00);
+    expect(res?.pathHashSize).toBe(1);
+    expect(res?.hops).toHaveLength(2);
+    expect(res?.hops[0]).toEqual({ hashHex: 'aa', snrDb: 5.5 });
+    expect(res?.hops[1]).toEqual({ hashHex: 'bb', snrDb: -2.25 });
+    expect(res?.finalSnrDb).toBe(7.0);
+
+    // Confirm NO pubKeyPrefixHex field exists on the parsed result
+    expect(res).not.toHaveProperty('pubKeyPrefixHex');
+  });
+
+  it('parses a 3-hop trace with 2-byte hashes (flags=0x01)', () => {
+    const frame = buildTraceFrame({
+      tag: 0x00000042,
+      authCode: 0x00000001,
+      flags: 0x01, // bytesPerHash = 2
+      hashes: [Buffer.from([0x11, 0x22]), Buffer.from([0x33, 0x44]), Buffer.from([0x55, 0x66])],
+      snrs: [10.0, 6.25, -1.0],
+      finalSnr: 4.5,
+    });
+    const res = parseTraceData(frame);
+    expect(res).not.toBeNull();
+    expect(res?.pathHashSize).toBe(2);
+    expect(res?.hops).toHaveLength(3);
+    expect(res?.hops[0]).toEqual({ hashHex: '1122', snrDb: 10 });
+    expect(res?.hops[1]).toEqual({ hashHex: '3344', snrDb: 6.25 });
+    expect(res?.hops[2]).toEqual({ hashHex: '5566', snrDb: -1.0 });
+    expect(res?.finalSnrDb).toBe(4.5);
+  });
+
+  it('parses a 0-hop trace (path_len=0) — just the final SNR remains', () => {
+    // flags=0x00 → bytesPerHash=1; path_len=0 → hopCount=0
+    const frame = buildTraceFrame({
+      tag: 0x00000001,
+      authCode: 0x00000002,
+      flags: 0x00,
+      hashes: [],
+      snrs: [],
+      finalSnr: -3.25,
+    });
+    const res = parseTraceData(frame);
+    expect(res).not.toBeNull();
+    expect(res?.hops).toHaveLength(0);
+    expect(res?.finalSnrDb).toBe(-3.25);
+  });
+
+  it('returns null when frame is too short for the header', () => {
+    expect(parseTraceData(Buffer.alloc(12))).toBeNull();
+  });
+
+  it('returns null when frame is truncated (missing SNR bytes)', () => {
+    // Build a valid 2-hop frame then chop the last byte off
+    const frame = buildTraceFrame({
+      tag: 1,
+      authCode: 2,
+      flags: 0x00,
+      hashes: [Buffer.from([0xaa]), Buffer.from([0xbb])],
+      snrs: [1.0, 2.0],
+      finalSnr: 3.0,
+    });
+    expect(parseTraceData(frame.subarray(0, frame.length - 1))).toBeNull();
+  });
+
+  it('tagHex matches the key that repeaterTracePath registers with resolveTag', () => {
+    // repeaterTracePath does: Buffer.alloc(4).writeUInt32LE(tag>>>0, 0).toString('hex')
+    // parseTraceData does:   frame.subarray(4,8).toString('hex')
+    // Both must produce the same string for the awaiter to fire.
+    const tag = 0x12345678;
+    const frame = buildTraceFrame({ tag, authCode: 0, flags: 0x00, hashes: [], snrs: [], finalSnr: 0 });
+    const res = parseTraceData(frame);
+    const tagBuf = Buffer.alloc(4);
+    tagBuf.writeUInt32LE(tag >>> 0, 0);
+    expect(res?.tagHex).toBe(tagBuf.toString('hex'));
+  });
+});
+
+// ---- FIX B: parseLoginSuccess (PUSH 0x85) 14-byte new form ------------
+describe('parseLoginSuccess (FIX B — 14-byte new form)', () => {
+  function buildLoginSuccessFrame(opts: {
+    permissions: number;
+    pubKeyPrefix: string; // 12 hex chars = 6 bytes
+    tag: number;
+    aclPermissions: number;
+    firmwareVerLevel: number;
+  }): Buffer {
+    // New form: [0x85][perms][6B prefix][tag u32 LE][acl][fw_ver] = 14 bytes
+    const frame = Buffer.alloc(14);
+    frame[0] = 0x85;
+    frame[1] = opts.permissions;
+    Buffer.from(opts.pubKeyPrefix, 'hex').copy(frame, 2);
+    frame.writeUInt32LE(opts.tag >>> 0, 8);
+    frame[12] = opts.aclPermissions;
+    frame[13] = opts.firmwareVerLevel;
+    return frame;
+  }
+
+  it('parses the 14-byte new form and populates tag/acl/firmwareVerLevel', () => {
+    const frame = buildLoginSuccessFrame({
+      permissions: 0x00,
+      pubKeyPrefix: 'aabbccddeeff',
+      tag: 0xdeadbeef,
+      aclPermissions: 0x03, // PERM_ACL_ADMIN
+      firmwareVerLevel: 6,
+    });
+    const res = parseLoginSuccess(frame);
+    expect(res).not.toBeNull();
+    expect(res?.pubKeyPrefixHex).toBe('aabbccddeeff');
+    expect(res?.serverTagHex).toBe(Buffer.from([0xef, 0xbe, 0xad, 0xde]).toString('hex')); // LE stored
+    expect(res?.aclPermissions).toBe(0x03);
+    expect(res?.firmwareVerLevel).toBe(6);
+  });
+
+  it('correctly identifies admin when aclPermissions=0x03 (PERM_ACL_ADMIN)', () => {
+    const frame = buildLoginSuccessFrame({
+      permissions: 0x00,
+      pubKeyPrefix: 'aabbccddeeff',
+      tag: 1,
+      aclPermissions: 0x03, // admin = both bits set
+      firmwareVerLevel: 6,
+    });
+    const res = parseLoginSuccess(frame);
+    expect(res?.isAdmin).toBe(true);
+  });
+
+  it('does NOT treat read-only (aclPermissions=0x01) as admin', () => {
+    const frame = buildLoginSuccessFrame({
+      permissions: 0x00,
+      pubKeyPrefix: 'aabbccddeeff',
+      tag: 1,
+      aclPermissions: 0x01, // PERM_ACL_READ_ONLY — must NOT be admin
+      firmwareVerLevel: 6,
+    });
+    const res = parseLoginSuccess(frame);
+    expect(res?.isAdmin).toBe(false);
+  });
+
+  it('treats permissions byte != 0 as admin in new form (legacy admin path)', () => {
+    const frame = buildLoginSuccessFrame({
+      permissions: 0x01, // permissions byte set
+      pubKeyPrefix: 'aabbccddeeff',
+      tag: 1,
+      aclPermissions: 0x00, // no ACL admin
+      firmwareVerLevel: 6,
+    });
+    const res = parseLoginSuccess(frame);
+    expect(res?.isAdmin).toBe(true);
+  });
+
+  it('parses the 8-byte legacy form (no tag/acl/firmwareVerLevel)', () => {
+    // Legacy: [0x85][0 is_admin=0][6B prefix]
+    const frame = Buffer.concat([Buffer.from([0x85, 0x00]), Buffer.from('aabbccddeeff', 'hex')]);
+    expect(frame.length).toBe(8);
+    const res = parseLoginSuccess(frame);
+    expect(res).not.toBeNull();
+    expect(res?.pubKeyPrefixHex).toBe('aabbccddeeff');
+    expect(res?.serverTagHex).toBeNull();
+    expect(res?.aclPermissions).toBeNull();
+    expect(res?.firmwareVerLevel).toBeNull();
+    expect(res?.isAdmin).toBe(false);
+  });
+
+  it('legacy form with non-zero permissions byte is admin', () => {
+    const frame = Buffer.concat([Buffer.from([0x85, 0x01]), Buffer.from('aabbccddeeff', 'hex')]);
+    const res = parseLoginSuccess(frame);
+    expect(res?.isAdmin).toBe(true);
+  });
+
+  it('returns null for frames shorter than 8 bytes', () => {
+    expect(parseLoginSuccess(Buffer.alloc(7))).toBeNull();
   });
 });
