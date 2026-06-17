@@ -1,0 +1,12 @@
+packages:
+  - docs
+
+# Dependencies allowed to run install/build scripts. pnpm 11 manages this map;
+# `pnpm approve-builds` writes entries (supersedes the deprecated onlyBuiltDependencies).
+allowBuilds:
+  '@serialport/bindings-cpp': true
+  '@stoprocent/bluetooth-hci-socket': true
+  '@stoprocent/noble': true
+  esbuild: true
+  sharp: true
+  usb: true

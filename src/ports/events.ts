@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { DiscoveredContact } from '../contacts/discovered';
+import type { ContactRecord, ContactSource } from '../features/contacts';
 import type { MeshSource } from '../frame';
 import type {
   AutoAddConfig,
@@ -40,7 +41,12 @@ export interface MeshCoreEventMap {
   discovered: (rows: DiscoveredContact[]) => void;
   contactEvicted: (name: string) => void;
   contactDiscovered: (c: { key: string; name: string; kind: ContactKind }) => void;
+  /** Fires whenever a contact record is ingested (sync or advert), exposing the
+   *  raw decoded record so consumers can persist it themselves. */
+  contactObserved: (record: ContactRecord, source: ContactSource) => void;
   messages: (key: string, messages: Message[]) => void;
+  /** A single inserted/updated message — a delta companion to `messages`. */
+  messageUpserted: (message: Message) => void;
   messageState: (id: string, state: MessageState) => void;
   messagePathHeard: (p: { id: string; path: MessagePath; state: MessageState }) => void;
   owner: (owner: Owner | null) => void;

@@ -389,6 +389,10 @@ export function ingestContact(ctx: FeatureContext, record: ContactRecord, source
   if (source === 'advert' && !onRadio && shouldAutoAdd(ctx, record.type)) {
     scheduleContactsResync(ctx);
   }
+
+  // Single chokepoint for both sync (RESP_CONTACT) and advert ingestion — one
+  // emit surfaces the raw decoded record to consumers that persist it.
+  ctx.events.emit('contactObserved', record, source);
 }
 
 // ---- Inbound feature ---------------------------------------------------

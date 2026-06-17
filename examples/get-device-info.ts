@@ -3,7 +3,7 @@ import { MeshCoreSession } from '@andyshinn/meshcore-ts';
 import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
 import { requireArg, waitForEvent } from './lib/helpers';
 
-const path = requireArg(process.argv, 2, 'usage: npm run example examples/get-device-info.ts <serial-port>');
+const path = requireArg(process.argv, 2, 'usage: pnpm example examples/get-device-info.ts <serial-port>');
 
 const port = new SerialPort({ path, baudRate: 115200 });
 const session = new MeshCoreSession({ transport: new SerialTransport(port) });

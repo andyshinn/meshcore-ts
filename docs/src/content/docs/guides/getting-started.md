@@ -15,7 +15,7 @@ library does everything above that line and emits typed events.
 ## Install
 
 ```sh
-npm install @andyshinn/meshcore-ts
+pnpm add @andyshinn/meshcore-ts
 ```
 
 > **Node-only.** Uses `node:buffer` and `node:crypto`. Not a browser build.

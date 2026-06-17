@@ -200,6 +200,7 @@ export const channelMessagesFeature: Feature = {
       },
     };
     ctx.state.upsertMessage(message);
+    ctx.events.emit('messageUpserted', message);
     ctx.events.emit('messages', channel.key, ctx.state.getMessagesForKey(channel.key));
     ctx.log.debug(
       `channel msg idx=${parsed.channelIdx} → "${channel.name}" (${channel.key}) ` +

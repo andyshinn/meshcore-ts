@@ -403,6 +403,7 @@ function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): voi
     meta: { snr: parsed.snrDb },
   };
   ctx.state.insertMessage(message);
+  ctx.events.emit('messageUpserted', message);
   ctx.events.emit('messages', contact.key, ctx.state.getMessagesForKey(contact.key));
   ctx.log.debug(`contact msg from=${prefix} → "${contact.name}" body=${JSON.stringify(parsed.body.slice(0, 60))}`);
   // The radio only tickles PUSH_MSG_WAITING once per queue event; keep

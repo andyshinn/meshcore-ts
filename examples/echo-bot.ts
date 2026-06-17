@@ -6,7 +6,7 @@ import { requireArg } from './lib/helpers';
 const path = requireArg(
   process.argv,
   2,
-  'usage: npm run example examples/echo-bot.ts <serial-port>',
+  'usage: pnpm example examples/echo-bot.ts <serial-port>',
 );
 
 const port = new SerialPort({ path, baudRate: 115200 });

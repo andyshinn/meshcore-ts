@@ -4,7 +4,7 @@ import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
 import { requireArg } from './lib/helpers';
 
 const usage =
-  'usage: npm run example examples/get-repeater-neighbours.ts <serial-port> <pubkey-prefix-hex> [password]';
+  'usage: pnpm example examples/get-repeater-neighbours.ts <serial-port> <pubkey-prefix-hex> [password]';
 const path = requireArg(process.argv, 2, usage);
 const prefix = requireArg(process.argv, 3, usage);
 const password = process.argv[4] ?? '';

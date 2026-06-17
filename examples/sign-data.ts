@@ -4,7 +4,7 @@ import { MeshCoreSession } from '@andyshinn/meshcore-ts';
 import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
 import { requireArg } from './lib/helpers';
 
-const usage = 'usage: npm run example examples/sign-data.ts <serial-port> [text]';
+const usage = 'usage: pnpm example examples/sign-data.ts <serial-port> [text]';
 const path = requireArg(process.argv, 2, usage);
 const text = process.argv[3] ?? 'meshcore-ts';
 

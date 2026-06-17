@@ -4,7 +4,7 @@ import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
 import { requireArg, waitForEvent } from './lib/helpers';
 
 const usage =
-  'usage: npm run example examples/get-sensor-telemetry.ts <serial-port> <pubkey-prefix-hex>';
+  'usage: pnpm example examples/get-sensor-telemetry.ts <serial-port> <pubkey-prefix-hex>';
 const path = requireArg(process.argv, 2, usage);
 const prefix = requireArg(process.argv, 3, usage);
 

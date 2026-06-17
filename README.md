@@ -7,7 +7,7 @@ An application-agnostic [MeshCore](https://meshcore.co.uk/) companion-protocol l
 You bring a **Transport** (the bytes in/out of your radio); the library does everything above that line and emits typed events. You subscribe and persist however you like.
 
 ```
-npm install @andyshinn/meshcore-ts
+pnpm add @andyshinn/meshcore-ts
 ```
 
 > [!NOTE]
@@ -128,7 +128,7 @@ ported onto `MeshCoreSession` using the built-in serial and BLE transports. Run
 any of them with `tsx` (no build step):
 
 ```
-npm run example examples/get-contacts.ts /dev/cu.usbmodemXXXX
+pnpm example examples/get-contacts.ts /dev/cu.usbmodemXXXX
 ```
 
 See [`examples/README.md`](examples/README.md) for the full list. The
@@ -137,10 +137,10 @@ See [`examples/README.md`](examples/README.md) for the full list. The
 ## Scripts
 
 ```
-npm run build      # tsup → ESM + CJS + .d.ts
-npm test           # vitest
-npm run typecheck  # tsc --noEmit
-npm run lint       # biome
+pnpm build      # tsup → ESM + CJS + .d.ts
+pnpm test       # vitest
+pnpm typecheck  # tsc --noEmit
+pnpm lint       # biome
 ```
 
 ## License

@@ -8,13 +8,13 @@ against the local source — no build step.
 ## Running
 
 ```
-npm run example examples/<file>.ts [args]
+pnpm example examples/<file>.ts [args]
 ```
 
 Most examples take your device's serial port as the first argument:
 
 ```
-npm run example examples/get-contacts.ts /dev/cu.usbmodemXXXX
+pnpm example examples/get-contacts.ts /dev/cu.usbmodemXXXX
 ```
 
 Finding your serial port:

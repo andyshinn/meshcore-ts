@@ -4,7 +4,7 @@ import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
 import { requireArg } from './lib/helpers';
 
 const usage =
-  'usage: npm run example examples/send-channel-message.ts <serial-port> <channel-name> [text]';
+  'usage: pnpm example examples/send-channel-message.ts <serial-port> <channel-name> [text]';
 const path = requireArg(process.argv, 2, usage);
 const channelName = requireArg(process.argv, 3, usage);
 const text = process.argv[4] ?? 'Hello from meshcore-ts';
