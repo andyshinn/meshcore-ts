@@ -42,6 +42,7 @@ export default defineConfig({
             { label: 'Transports', slug: 'guides/transports' },
             { label: 'Messaging', slug: 'guides/messaging' },
             { label: 'Events & state', slug: 'guides/events-and-state' },
+            { label: 'Decoding packets', slug: 'guides/decoding-packets' },
           ],
         },
         typeDocSidebarGroup,

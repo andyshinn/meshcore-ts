@@ -29,6 +29,7 @@ Finding your serial port:
 | --- | --- | --- |
 | `parse-packet.ts` | no | Parse raw mesh-packet bytes |
 | `parse-advert.ts` | no | Parse an advert from a `meshcore://` URL |
+| `decode-on-air-packet.ts` | no | Structurally decode on-air packets (advert, group/text, trace) into a tagged union |
 | `get-contacts.ts` | serial | List the device's contacts |
 | `get-device-info.ts` | serial | Print device + radio info (firmware, model, battery, LoRa params) |
 | `send-contact-message.ts <port> <name> [text]` | serial | DM a contact found by name |
@@ -43,4 +44,5 @@ Finding your serial port:
 | `ble-get-contacts.ts` | BLE | List contacts over BLE (requires `@stoprocent/noble`) |
 | `ble-get-device-info.ts` | BLE | Print device + radio info over BLE (requires `@stoprocent/noble`) |
 
-The two parse examples run with no hardware and print deterministic output.
+The three no-device examples (`parse-packet.ts`, `parse-advert.ts`,
+`decode-on-air-packet.ts`) run with no hardware and print deterministic output.

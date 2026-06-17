@@ -25,14 +25,18 @@ transport.setState('connected');
 
 ## The events
 
-`transportState`, `channels`, `channelPresence`, `syncProgress`, `contacts`,
-`discovered`, `contactEvicted`, `contactDiscovered`, `messages`, `messageState`,
-`messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`,
+`transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`,
+`contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `messages`,
+`messageState`, `messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`,
 `repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`,
 `telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
 
 All payloads are exported types — see `MeshCoreEventMap` in the
 [API reference](../../api/readme/).
+
+`rawPacket` carries the raw on-air bytes of each received LoRa packet; pair it
+with `decodeOnAirPacket` to structurally decode them — see
+[Decoding on-air packets](../decoding-packets/).
 
 ## What the session can do
 
