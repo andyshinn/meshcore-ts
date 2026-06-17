@@ -363,6 +363,31 @@ export const ANON_REQ_TYPE = {
   BASIC: 0x03,
 } as const;
 
+const REQ_TYPE_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(REQ_TYPE).map(([name, value]) => [value, name]),
+);
+
+const ANON_REQ_TYPE_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(ANON_REQ_TYPE).map(([name, value]) => [value, name]),
+);
+
+// The REQ_TYPE byte lives in the encrypted body of a PAYLOAD_TYPE_REQ packet, so
+// these helpers can only name a byte the caller already holds (e.g. an outbound
+// SEND_BINARY_REQ) — not one recovered from a passively-observed on-air packet.
+
+/** Map a REQ_TYPE byte to its enum key name (e.g. 0x05 → 'GET_ACCESS_LIST'),
+ *  or 'UNKNOWN' if unmapped. */
+export function getRequestTypeName(reqType: number): string {
+  return REQ_TYPE_NAMES[reqType] ?? 'UNKNOWN';
+}
+
+/** Map an ANON_REQ_TYPE byte to its enum key name (e.g. 0x01 → 'REGIONS'), or
+ *  'UNKNOWN' if unmapped. Note a leading 0 or ASCII byte (>= 0x20) is a password
+ *  login rather than one of these query sub-types. */
+export function getAnonReqTypeName(anonReqType: number): string {
+  return ANON_REQ_TYPE_NAMES[anonReqType] ?? 'UNKNOWN';
+}
+
 export const STATS_TYPE = {
   CORE: 0x00,
   RADIO: 0x01,
