@@ -1,5 +1,7 @@
 // Public entry point for meshcore-ts.
-export const VERSION = '0.1.0';
+import { version } from '../package.json';
+
+export const VERSION: string = version;
 
 export * from './advert';
 export * from './buffer';
