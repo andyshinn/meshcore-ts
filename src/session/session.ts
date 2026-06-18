@@ -487,7 +487,10 @@ export class MeshCoreSession {
     //     in-flight send — fail the oldest DM. Any other unclaimed code is a
     //     no-op (e.g. a reply to a command we don't issue yet).
     if (code === RESP.OK || code === RESP.ERR) {
-      const errorCode = code === RESP.ERR ? frame[1] : undefined;
+      // A truncated/bare one-byte RESP_ERR carries no error byte — read frame[1]
+      // only when present so we pass `undefined` explicitly (matching ProtocolError's
+      // bare-RESP_ERR semantics) rather than relying on an out-of-bounds read.
+      const errorCode = code === RESP.ERR && frame.length >= 2 ? frame[1] : undefined;
       if (this.resolveNextAck(code === RESP.OK, errorCode)) return;
       if (code === RESP.ERR) {
         // A getContactByKey miss (RESP_ERR NOT_FOUND) has no queued ack; resolve

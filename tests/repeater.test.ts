@@ -62,6 +62,20 @@ describe('repeater encoders: 32-byte-pubkey commands', () => {
     expect(() => buildLogout('aabb')).toThrow(/32B/);
     expect(() => buildSendStatusReq('aabb')).toThrow(/32B/);
   });
+
+  it('rejects overlong pubkeys instead of silently truncating to 32 bytes', () => {
+    const overlong = `${pk}ff`; // 33 bytes
+    expect(() => buildLogout(overlong)).toThrow(/32B/);
+    expect(() => buildSendStatusReq(overlong)).toThrow(/32B/);
+    expect(() => buildSendTelemetryReq(overlong)).toThrow(/32B/);
+  });
+
+  it('rejects malformed hex (trailing garbage) instead of aliasing to the truncated key', () => {
+    const trailingGarbage = `${pk}zz`; // Buffer.from yields 32B and would alias to `pk`
+    expect(() => buildSendLogin(trailingGarbage, 'pw')).toThrow(/32B/);
+    expect(() => buildSendBinaryReq(trailingGarbage, Buffer.from([0x01]))).toThrow(/32B/);
+    expect(() => buildSendAnonReq(trailingGarbage, Buffer.from([0x01]))).toThrow(/32B/);
+  });
 });
 
 describe('repeater encoders: structured', () => {

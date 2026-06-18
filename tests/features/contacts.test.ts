@@ -56,6 +56,32 @@ describe('contacts encoders', () => {
     expect(() => encodeRemoveContact('aabb')).toThrow(/32B/);
   });
 
+  it('rejects overlong pubkeys instead of silently truncating to 32 bytes', () => {
+    const overlong = `${pk}ff`; // 66 hex chars / 33 bytes — must not truncate to `pk`
+    expect(() => encodeGetContactByKey(overlong)).toThrow(/32B/);
+    expect(() => encodeRemoveContact(overlong)).toThrow(/32B/);
+    expect(() => encodeResetPath(overlong)).toThrow(/32B/);
+  });
+
+  it('rejects malformed hex (trailing garbage / odd length / non-hex) instead of aliasing', () => {
+    expect(() => encodeGetContactByKey(`${pk}zz`)).toThrow(/32B/); // valid key + non-hex tail aliases to `pk`
+    expect(() => encodeGetContactByKey('a'.repeat(63))).toThrow(/32B/); // odd hex length
+    expect(() => encodeGetContactByKey('gg'.repeat(32))).toThrow(/32B/); // 64 chars but not hex
+  });
+
+  it('encodeAddUpdateContact rejects an overlong publicKeyHex', () => {
+    expect(() =>
+      encodeAddUpdateContact({
+        publicKeyHex: `${pk}ff`,
+        advType: 1,
+        flags: 0,
+        outPathHex: '',
+        name: 'Bob',
+        timestampUnix: 5,
+      }),
+    ).toThrow(/32B/);
+  });
+
   it('encodeAddUpdateContact omits the GPS tail when not provided (136 bytes)', () => {
     const out = encodeAddUpdateContact({
       publicKeyHex: pk,

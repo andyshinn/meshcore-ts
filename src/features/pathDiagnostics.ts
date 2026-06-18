@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { CMD, PUSH, RESP } from '../codes';
 import { ProtocolError } from '../errors';
 import type { Feature, FeatureContext } from '../feature';
+import { parsePublicKey } from '../pubkey';
 import { scheduleContactRefresh } from './contacts';
 
 // Path diagnostics (firmware: companion_radio/MyMesh.cpp). Two queries plus a
@@ -54,10 +55,7 @@ export interface DiscoveredPath {
 // ---- Encoders ----------------------------------------------------------
 
 function encodePubKeyCommand(code: number, destPublicKeyHex: string, label: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`${label} needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, label);
   const out = Buffer.alloc(2 + 32);
   out[0] = code;
   out[1] = 0; // reserved (firmware requires byte 1 == 0 for path discovery)

@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { ADV_TYPE, CMD, PUSH, RESP } from '../codes';
 import { advTypeToKind, hopsFromOutPathLen } from '../contacts/discovered';
 import type { Feature, FeatureContext } from '../feature';
+import { parsePublicKey } from '../pubkey';
 import type { Contact } from '../types';
 
 // ---- Wire types --------------------------------------------------------
@@ -61,10 +62,7 @@ export function encodeGetContacts(since?: number): Buffer {
 // decodeContact) with the leading cmd byte. The 12-byte GPS + last-advert tail
 // is all-present or all-absent (issue #427 in zjs81/meshcore-open).
 export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
-  const pubkey = Buffer.from(input.publicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`update contact needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(input.publicKeyHex, 'update contact');
   const path = Buffer.from(input.outPathHex, 'hex');
   if (path.length > 64) {
     throw new Error(`out_path is ${path.length}B, max 64`);
@@ -93,10 +91,7 @@ export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
 
 // CMD_RESET_PATH: [0x0d][32B pubkey]. Drops the contact's out_path → flood.
 export function encodeResetPath(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`reset path needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'reset path');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.RESET_PATH;
   pubkey.copy(out, 1, 0, 32);
@@ -106,10 +101,7 @@ export function encodeResetPath(destPublicKeyHex: string): Buffer {
 // CMD_REMOVE_CONTACT: [0x0f][32B pubkey]. Deletes the contact from the radio's
 // on-device store. Replies RESP_OK / RESP_ERR.
 export function encodeRemoveContact(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`remove contact needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'remove contact');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.REMOVE_CONTACT;
   pubkey.copy(out, 1, 0, 32);
@@ -119,10 +111,7 @@ export function encodeRemoveContact(destPublicKeyHex: string): Buffer {
 // CMD_GET_CONTACT_BY_KEY: [0x1e][32B pubkey]. Replies RESP_CONTACT (the full
 // 148B contact frame) if the radio has it, else RESP_ERR (NOT_FOUND).
 export function encodeGetContactByKey(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`get contact needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'get contact');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.GET_CONTACT_BY_KEY;
   pubkey.copy(out, 1, 0, 32);
@@ -453,7 +442,9 @@ export function failPendingContactByKey(ctx: FeatureContext): boolean {
  *  Resolves the contact record, or null when the radio doesn't have it. */
 export function getContactByKey(ctx: FeatureContext, destPublicKeyHex: string): Promise<ContactRecord | null> {
   const frame = encodeGetContactByKey(destPublicKeyHex);
-  const publicKeyHex = Buffer.from(destPublicKeyHex, 'hex').subarray(0, 32).toString('hex');
+  // encodeGetContactByKey already validated the key; normalise to lowercase hex
+  // for the pending-lookup match (record.publicKeyHex is lowercase from decode).
+  const publicKeyHex = parsePublicKey(destPublicKeyHex, 'get contact').toString('hex');
   return new Promise<ContactRecord | null>((resolve, reject) => {
     const entry: PendingContactByKey = {
       publicKeyHex,

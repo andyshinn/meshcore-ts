@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { CMD, RESP } from '../codes';
 import type { FeatureContext } from '../feature';
+import { parsePublicKey } from '../pubkey';
 
 // Contact interop (firmware: companion_radio/MyMesh.cpp:1298-1353). Share, export
 // and import contacts as serialized advert blobs. The blob is opaque here — the
@@ -16,22 +17,16 @@ const MIN_IMPORT_BLOB = 98;
 
 // CMD_SHARE_CONTACT: [0x10][32B pubkey].
 export function encodeShareContact(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`share contact needs full 32B public key, got ${pubkey.length}`);
-  }
-  return Buffer.concat([Buffer.from([CMD.SHARE_CONTACT]), pubkey.subarray(0, 32)]);
+  const pubkey = parsePublicKey(destPublicKeyHex, 'share contact');
+  return Buffer.concat([Buffer.from([CMD.SHARE_CONTACT]), pubkey]);
 }
 
 // CMD_EXPORT_CONTACT: [0x11] exports the device's own identity; [0x11][32B pubkey]
 // exports a known contact. Replies RESP_EXPORT_CONTACT.
 export function encodeExportContact(destPublicKeyHex?: string): Buffer {
   if (destPublicKeyHex === undefined) return Buffer.from([CMD.EXPORT_CONTACT]);
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`export contact needs full 32B public key, got ${pubkey.length}`);
-  }
-  return Buffer.concat([Buffer.from([CMD.EXPORT_CONTACT]), pubkey.subarray(0, 32)]);
+  const pubkey = parsePublicKey(destPublicKeyHex, 'export contact');
+  return Buffer.concat([Buffer.from([CMD.EXPORT_CONTACT]), pubkey]);
 }
 
 // CMD_IMPORT_CONTACT: [0x12][serialized advert blob].

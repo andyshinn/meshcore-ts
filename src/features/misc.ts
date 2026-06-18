@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { CMD, RESP } from '../codes';
 import type { FeatureContext } from '../feature';
+import { parsePublicKey } from '../pubkey';
 
 /**
  * An inclusive frequency range the radio is permitted to repeat on.
@@ -14,10 +15,7 @@ export interface RepeatFreqRange {
 // CMD_HAS_CONNECTION: [0x1c][pubkey 32B]. Replies RESP_OK (an active connection
 // to that node exists) or RESP_ERR (NOT_FOUND).
 export function encodeHasConnection(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`has_connection needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'has_connection');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.HAS_CONNECTION;
   pubkey.copy(out, 1, 0, 32);

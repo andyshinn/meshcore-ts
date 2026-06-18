@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { CMD, type STATS_TYPE } from './codes';
+import { parsePublicKey } from './pubkey';
 
 // PUSH_LOGIN_SUCCESS (firmware: companion_radio/MyMesh.cpp:676-700). Two
 // shapes exist on the wire:
@@ -286,10 +287,7 @@ export function parseLocalStats(frame: Buffer): LocalStats | null {
 // Radio replies with RESP_SENT (tag + est_timeout). The actual status payload
 // arrives later as PUSH_STATUS_RESPONSE.
 export function buildSendStatusReq(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`status req needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'status req');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.SEND_STATUS_REQ;
   pubkey.copy(out, 1, 0, 32);
@@ -301,10 +299,7 @@ export function buildSendStatusReq(destPublicKeyHex: string): Buffer {
 // The 3 reserved bytes after the opcode are placeholder filter flags in the
 // firmware path that takes len >= 4 + PUB_KEY_SIZE; we zero them.
 export function buildSendTelemetryReq(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`telemetry req needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'telemetry req');
   const out = Buffer.alloc(4 + 32);
   out[0] = CMD.SEND_TELEMETRY_REQ;
   // bytes 1..3 stay zero
@@ -316,10 +311,7 @@ export function buildSendTelemetryReq(destPublicKeyHex: string): Buffer {
 // MyMesh.cpp:1500-1521). Firmware appends a null terminator beyond `len`, so we
 // pass the password as-is — no need to send a trailing 0.
 export function buildSendLogin(destPublicKeyHex: string, password: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`login needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'login');
   const pw = Buffer.from(password, 'utf8');
   const out = Buffer.alloc(1 + 32 + pw.length);
   out[0] = CMD.SEND_LOGIN;
@@ -330,10 +322,7 @@ export function buildSendLogin(destPublicKeyHex: string, password: string): Buff
 
 // CMD_LOGOUT: [0x1d][32B dest pubkey]. Firmware MyMesh.cpp:1656-1659.
 export function buildLogout(destPublicKeyHex: string): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`logout needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'logout');
   const out = Buffer.alloc(1 + 32);
   out[0] = CMD.LOGOUT;
   pubkey.copy(out, 1, 0, 32);
@@ -345,10 +334,7 @@ export function buildLogout(destPublicKeyHex: string): Buffer {
 // either a password (sub-type byte starts with ASCII), or one of the ANON_REQ
 // query types (0x01..0x03). Firmware: MyMesh.cpp:1522-1542.
 export function buildSendAnonReq(destPublicKeyHex: string, data: Buffer): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`anon_req needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'anon_req');
   if (data.length === 0) throw new Error('anon_req data must be ≥1 byte');
   const out = Buffer.alloc(1 + 32 + data.length);
   out[0] = CMD.SEND_ANON_REQ;
@@ -396,10 +382,7 @@ export function buildGetStats(subtype: (typeof STATS_TYPE)[keyof typeof STATS_TY
 // REQ_TYPE_GET_NEIGHBOURS, REQ_TYPE_GET_OWNER_INFO, REQ_TYPE_GET_AVG_MIN_MAX —
 // anything other than STATUS/TELEMETRY which have dedicated CMD opcodes already.
 export function buildSendBinaryReq(destPublicKeyHex: string, reqData: Buffer): Buffer {
-  const pubkey = Buffer.from(destPublicKeyHex, 'hex');
-  if (pubkey.length < 32) {
-    throw new Error(`binary_req needs full 32B public key, got ${pubkey.length}`);
-  }
+  const pubkey = parsePublicKey(destPublicKeyHex, 'binary_req');
   if (reqData.length === 0) throw new Error('binary_req data must be ≥1 byte');
   const out = Buffer.alloc(1 + 32 + reqData.length);
   out[0] = CMD.SEND_BINARY_REQ;
