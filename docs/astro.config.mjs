@@ -4,7 +4,7 @@ import starlight from '@astrojs/starlight';
 import starlightTypeDoc, { typeDocSidebarGroup } from 'starlight-typedoc';
 
 export default defineConfig({
-  site: 'https://andyshinn.github.io',
+  site: 'https://andyshinn.as',
   base: '/meshcore-ts',
   // Always emit/serve trailing-slash directory URLs so relative internal links
   // (e.g. ../transports/) resolve correctly under the base path in dev,
