@@ -3,6 +3,12 @@
   "version": "0.1.1",
   "description": "Application-agnostic MeshCore companion-protocol library (Node, TypeScript)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andyshinn/meshcore-ts.git"
+  },
+  "homepage": "https://andyshinn.as/meshcore-ts/",
+  "bugs": "https://github.com/andyshinn/meshcore-ts/issues",
   "type": "module",
   "files": [
     "dist"
@@ -42,7 +48,7 @@
   },
   "packageManager": "pnpm@11.6.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.0",
