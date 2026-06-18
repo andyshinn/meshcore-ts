@@ -26,13 +26,19 @@ transport.setState('connected');
 ## The events
 
 `transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`,
-`contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `messages`,
-`messageState`, `messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`,
-`repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`,
-`telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
+`contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`,
+`messages`, `messageState`, `messagePathHeard`, `owner`, `radioSettings`,
+`repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`,
+`autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`,
+`deviceCapabilities`.
 
 All payloads are exported types — see `MeshCoreEventMap` in the
 [API reference](../../api/readme/).
+
+There is intentionally no generic `error` event. Specific recoverable
+conditions get their own dedicated event instead — for example `contactsFull`
+fires when the radio's contact store is full and a new advert could not be
+auto-added. Adapters can bridge such events onto their own error/toast channel.
 
 `rawPacket` carries the raw on-air bytes of each received LoRa packet; pair it
 with `decodeOnAirPacket` to structurally decode them — see

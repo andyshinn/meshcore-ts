@@ -28,8 +28,11 @@ import type {
  * Strongly-typed map of every event the library emits. The session owns a
  * `MeshCoreEvents` instance and exposes it as `session.events`.
  *
- * Note: there is intentionally NO `error` event here — the donor app's
- * `errorMessage` channel was dropped during extraction.
+ * Note: there is intentionally NO generic `error` event here — the donor app's
+ * `errorMessage` channel was dropped during extraction. Specific recoverable
+ * conditions are surfaced as their own dedicated events instead (e.g.
+ * {@link MeshCoreEventMap.contactsFull}), which adapters may map onto their own
+ * error/toast channel.
  */
 export interface MeshCoreEventMap {
   transportState: (s: TransportState) => void;
@@ -40,6 +43,11 @@ export interface MeshCoreEventMap {
   contacts: (contacts: Contact[]) => void;
   discovered: (rows: DiscoveredContact[]) => void;
   contactEvicted: (name: string) => void;
+  /** The radio's contact store is full — a new advert could not be auto-added
+   *  (overwrite-oldest off, or all slots favourited). Informational/recoverable:
+   *  the user must remove or favourite contacts to make room. Adapters may bridge
+   *  this onto their own error/toast channel. */
+  contactsFull: () => void;
   contactDiscovered: (c: { key: string; name: string; kind: ContactKind }) => void;
   /** Fires whenever a contact record is ingested (sync or advert), exposing the
    *  raw decoded record so consumers can persist it themselves. */
