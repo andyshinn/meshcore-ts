@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
+import { AdminSessionStore } from '../../src/features/adminSessions';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
 import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
@@ -7,6 +8,7 @@ import { createDmRuntime, directMessagesFeature } from '../../src/features/direc
 import { createDrainRuntime } from '../../src/features/drain';
 import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
+import { PendingChannelSends } from '../../src/features/pendingChannelSends';
 import {
   createAdminCorrRuntime,
   registerAdminHooks,
@@ -20,11 +22,9 @@ import {
 import { MeshObservations } from '../../src/model/meshObservations';
 import { SessionState } from '../../src/model/state/model';
 import type { Contact } from '../../src/model/types';
-import { PendingChannelSends } from '../../src/pendingChannelSends';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';
 import { PUSH, TXT_TYPE } from '../../src/protocol/codes';
-import { AdminSessionStore } from '../../src/session/adminSessions';
 
 // A full per-session ctx: real MeshCoreEvents + SessionState + AdminSessionStore
 // + rt (with adminCorr under test plus the sibling rt factories), capturing writes.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { PendingChannelSends } from '../src/features/pendingChannelSends';
 import type { MeshObservation } from '../src/model/meshObservations';
 import { SessionState } from '../src/model/state/model';
 import type { Message, MessagePath } from '../src/model/types';
-import { PendingChannelSends } from '../src/pendingChannelSends';
 import { MeshCoreEvents } from '../src/ports/events';
 
 function obs(over: Partial<MeshObservation> = {}): MeshObservation {

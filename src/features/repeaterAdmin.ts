@@ -29,7 +29,7 @@ import {
   parseTraceData,
   type TraceData,
 } from '../protocol/repeater';
-import type { AdminMode, AdminRole } from '../session/adminSessions';
+import type { AdminMode, AdminRole } from './adminSessions';
 import * as directMessages from './directMessages';
 import type { Feature, FeatureContext } from './feature';
 

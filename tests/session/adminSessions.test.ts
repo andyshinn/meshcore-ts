@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type AdminSessionState, AdminSessionStore } from '../../src/session/adminSessions';
+import { type AdminSessionState, AdminSessionStore } from '../../src/features/adminSessions';
 
 function session(over: Partial<AdminSessionState> = {}): AdminSessionState {
   return {

@@ -19,11 +19,11 @@ import {
 import { createDrainRuntime } from '../../src/features/drain';
 import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
+import { PendingChannelSends } from '../../src/features/pendingChannelSends';
 import { createAdminCorrRuntime } from '../../src/features/repeaterAdmin';
 import { MeshObservations } from '../../src/model/meshObservations';
 import { SessionState } from '../../src/model/state/model';
 import type { Contact } from '../../src/model/types';
-import { PendingChannelSends } from '../../src/pendingChannelSends';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';
 import { TXT_TYPE } from '../../src/protocol/codes';

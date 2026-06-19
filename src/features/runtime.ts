@@ -1,12 +1,12 @@
-import { type ChannelsRuntime, createChannelsRuntime } from '../features/channels';
-import { type ContactsIterRuntime, createContactsIterRuntime } from '../features/contacts';
-import { createDeviceAdminRuntime, type DeviceAdminRuntime } from '../features/deviceAdmin';
-import { createDmRuntime, type DmRuntime } from '../features/directMessages';
-import { createDrainRuntime, type DrainRuntime } from '../features/drain';
-import { createPathDiagRuntime, type PathDiagRuntime } from '../features/pathDiagnostics';
-import { type AdminCorrRuntime, createAdminCorrRuntime } from '../features/repeaterAdmin';
 import { MeshObservations } from '../model/meshObservations';
-import { PendingChannelSends } from '../pendingChannelSends';
+import { type ChannelsRuntime, createChannelsRuntime } from './channels';
+import { type ContactsIterRuntime, createContactsIterRuntime } from './contacts';
+import { createDeviceAdminRuntime, type DeviceAdminRuntime } from './deviceAdmin';
+import { createDmRuntime, type DmRuntime } from './directMessages';
+import { createDrainRuntime, type DrainRuntime } from './drain';
+import { createPathDiagRuntime, type PathDiagRuntime } from './pathDiagnostics';
+import { PendingChannelSends } from './pendingChannelSends';
+import { type AdminCorrRuntime, createAdminCorrRuntime } from './repeaterAdmin';
 
 /** Per-session mutable state, replacing every former module-level global. */
 export interface SessionRuntime {
