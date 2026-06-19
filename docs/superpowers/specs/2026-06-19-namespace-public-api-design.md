@@ -152,9 +152,36 @@ because they are the `catch` / `instanceof` surface.
 
 ### `Protocol` — `src/protocol.ts`
 
-Unchanged contents from today's barrel: `BufferReader`, `BufferWriter`, `CMD`,
-`RESP`, encode/decode functions, `advert`, `frame`, `meshPacket`,
-`onAirPackets`, `pubkey`, `repeater`, `codes`.
+Today's barrel contents: `BufferReader`, `BufferWriter`, `CMD`, `RESP`,
+encode/decode functions, `advert`, `frame`, `meshPacket`, `onAirPackets`
+(incl. `decodeOnAirPacket`, `OnAirPacket`, `OnAirPayload`), `pubkey`, `repeater`,
+`codes`.
+
+**Addition — `PayloadKind` named constants.** The decoder's `OnAirPayload` union
+discriminates on a camelCase `kind` string (`'advert'`, `'grpTxt'`, `'trace'`,
+…). To let consumers branch on readable names instead of magic strings — and
+still get TypeScript narrowing — add an `as const` map in
+`protocol/onAirPackets.ts`:
+
+```ts
+export const PayloadKind = { ADVERT: 'advert', GRP_TXT: 'grpTxt', /* … */ } as const
+  satisfies Record<string, OnAirPayload['kind']>;
+export type PayloadKind = OnAirPayload['kind'];
+```
+
+It flows into the namespace as `Protocol.PayloadKind` automatically (the barrel
+already does `export * from './protocol/onAirPackets'`). A `const` map (not a TS
+`enum`) is used deliberately: it is tree-shakeable, erasable, and — because its
+values are the literal `kind` strings — `case Protocol.PayloadKind.GRP_TXT:`
+narrows `payload`, which a string `enum` would not do against the existing
+literal union. A compile-time guard asserts every `kind` has a constant.
+`Protocol.PayloadKind` is intentionally distinct from the existing numeric wire
+enum `Protocol.PAYLOAD_TYPE` (which keys `header.payloadType`).
+
+**Interchangeable with raw strings (deliberate).** Because the union keeps its
+literal `kind` type, the constant is *optional sugar* — a consumer may write
+`case Protocol.PayloadKind.GRP_TXT:` or `case 'grpTxt':` and both compile and
+narrow identically. Nothing is forced.
 
 ### `Transports` — `src/transports.ts`
 
@@ -166,6 +193,24 @@ Hardware adapters, with shortened names (see naming map). `LoopbackTransport`
 
 The injection contracts: `Ports.Transport` (interface), `Ports.Logger`,
 `Ports.EventMap`, `Ports.Events`, and `Ports.noopLogger` (handy default).
+
+**Addition — `EventName` named constants.** Subscriptions take a
+`keyof MeshCoreEventMap` string (`session.events.on('rawPacket', …)`). To let
+consumers subscribe by readable name, add an `as const` map in `ports/events.ts`,
+exported via the `Ports` barrel as `Ports.EventName`:
+
+```ts
+export const EventName = { RAW_PACKET: 'rawPacket', CONTACTS_FULL: 'contactsFull', /* … */ } as const
+  satisfies Record<string, keyof MeshCoreEventMap>;
+export type EventName = keyof MeshCoreEventMap;
+```
+
+Named `EventName` (not `Events`, which is the emitter class `Ports.Events`). A
+compile-time guard asserts every event key has a constant, so the map cannot
+drift from `MeshCoreEventMap`. As with `PayloadKind`, this is **interchangeable
+with raw strings**: `session.events.on(Ports.EventName.RAW_PACKET, h)` and
+`session.events.on('rawPacket', h)` are equivalent and both infer the typed
+listener — the constant is optional ergonomics, never required.
 
 ### `Features` — `src/features.ts`
 

@@ -26,9 +26,9 @@
 | top-level | `src/index.ts` | `MeshCoreSession` (value), `MeshCoreSessionOptions` (type), `VERSION` (value) |
 | `Models` | `src/model.ts` (new) | everything from `model/types.ts`, `model/contactTypes.ts`, `model/contacts.ts`, `model/meshObservations.ts` |
 | `Errors` | `src/model/errors.ts` (existing, used directly) | `ProtocolError`, `ProtocolTimeoutError`, `UnknownContactError`, `ContactTableFullError`, `FeatureDisabledError` |
-| `Protocol` | `src/protocol.ts` (existing, unchanged) | current contents (codec; includes `protocol/repeater.ts` types like `LoginSuccess`, `AclEntry`, `NeighboursPage`, `OwnerInfo`, `LocalStats`, `AvgMinMaxResult`, `TraceData`) |
+| `Protocol` | `src/protocol.ts` (existing barrel unchanged; `onAirPackets.ts` gains `PayloadKind`) | current contents (codec; `decodeOnAirPacket`, `OnAirPacket`, `OnAirPayload`; `protocol/repeater.ts` types `LoginSuccess`, `AclEntry`, `NeighboursPage`, `OwnerInfo`, `LocalStats`, `AvgMinMaxResult`, `TraceData`) **+ new `PayloadKind` const/type** |
 | `Transports` | `src/transports.ts` (edit) | `Serial`, `Ble`, `Loopback`, `createBle`, `NORDIC_UART`, `SerialDeframer`, `encodeSerialFrame`, `SerialPortLike`, `BleHooks` |
-| `Ports` | `src/ports.ts` (new) | `Transport`, `Logger`, `noopLogger`, `EventMap`, `Events` |
+| `Ports` | `src/ports.ts` (new); `ports/events.ts` gains `EventName` | `Transport`, `Logger`, `noopLogger`, `EventMap`, `Events`, **+ new `EventName` const/type** |
 | `Features` | `src/features.ts` (new) | `Feature`, `FeatureContext`, `ContactsSyncSignal`, `SelfInfo`, `TuningParams`, `AutoAddFlagsInput`, `AdminMode`, `RepeaterReachMode`, `DefaultFloodScope`, `FloodScopeInput`, `RepeatFreqRange`, `AdvertPath`, `DiscoveredPath` (all type-only) |
 
 **Naming map (aliased re-exports):**
@@ -42,6 +42,11 @@
 | `MeshCoreEventMap` (`ports/events`) | `Ports.EventMap` |
 | `MeshCoreEvents` (`ports/events`) | `Ports.Events` |
 | all other members | unchanged |
+
+**Named-constant maps (`PayloadKind`, `EventName`) — rules:**
+- Implement as `as const` objects, **never** TS `enum`s (tree-shakeable, erasable; preserve literal types).
+- The underlying public types stay literal-string unions (`OnAirPayload['kind']`, `keyof MeshCoreEventMap`), so the constant and the raw string are **fully interchangeable** — `case 'grpTxt':` and `case Protocol.PayloadKind.GRP_TXT:` both compile and narrow; `.on('rawPacket', h)` and `.on(Ports.EventName.RAW_PACKET, h)` are equivalent. Do NOT retype any union field to the const — that would break the raw-string form.
+- Each map carries a compile-time drift guard so it cannot fall out of sync with its source union/map.
 
 ---
 
@@ -120,15 +125,16 @@ git commit -m "feat: add Models namespace barrel (src/model.ts)"
 
 ---
 
-### Task 2: `Ports` namespace barrel
+### Task 2: `Ports` namespace barrel (+ `EventName` constants)
 
 **Files:**
+- Modify: `src/ports/events.ts` (add `EventName` const/type + drift guard)
 - Create: `src/ports.ts`
 - Test: `tests/namespaces/ports.test.ts`
 
 **Interfaces:**
-- Consumes: `ports/transport.ts` (`Transport`), `ports/logger.ts` (`Logger`, `noopLogger`), `ports/events.ts` (`MeshCoreEventMap`, `MeshCoreEvents`).
-- Produces: module `../src/ports` exposing values `noopLogger`, `Events`; types `Transport`, `Logger`, `EventMap`. **`LoopbackTransport` is intentionally NOT here** — it belongs to `Transports` (Task 4).
+- Consumes: `ports/transport.ts` (`Transport`), `ports/logger.ts` (`Logger`, `noopLogger`), `ports/events.ts` (`MeshCoreEventMap`, `MeshCoreEvents`, new `EventName`).
+- Produces: module `../src/ports` exposing values `noopLogger`, `Events`, `EventName`; types `Transport`, `Logger`, `EventMap`, `EventName`. **`LoopbackTransport` is intentionally NOT here** — it belongs to `Transports` (Task 5). `Ports.EventName.RAW_PACKET === 'rawPacket'`, interchangeable with the raw string.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -156,6 +162,21 @@ describe('Ports namespace barrel', () => {
     expect(l).toBe(Ports.noopLogger);
     expect(m).toBeDefined();
   });
+
+  it('exposes EventName constants equal to the raw event keys', () => {
+    expect(Ports.EventName.RAW_PACKET).toBe('rawPacket');
+    expect(Ports.EventName.CONTACTS_FULL).toBe('contactsFull');
+    expect(Ports.EventName.DEVICE_CAPABILITIES).toBe('deviceCapabilities');
+  });
+
+  it('subscription accepts BOTH the constant and the raw string, typed identically', () => {
+    const events = new Ports.Events();
+    // Constant form — handler arg is fully typed.
+    events.on(Ports.EventName.RAW_PACKET, (pkt) => void pkt.hex);
+    // Raw-string form — equivalent, same typed handler.
+    events.on('rawPacket', (pkt) => void pkt.hex);
+    expect(events).toBeInstanceOf(Ports.Events);
+  });
 });
 ```
 
@@ -164,7 +185,57 @@ describe('Ports namespace barrel', () => {
 Run: `pnpm vitest run tests/namespaces/ports.test.ts`
 Expected: FAIL — cannot find module `../../src/ports`.
 
-- [ ] **Step 3: Create the barrel**
+- [ ] **Step 3: Add `EventName` constants to `src/ports/events.ts`**
+
+Insert, immediately after the `MeshCoreEventMap` interface (before `type RawListener`):
+
+```ts
+/** Named constants for every key in {@link MeshCoreEventMap}, so consumers may
+ *  subscribe by readable name instead of a bare string:
+ *  `session.events.on(EventName.RAW_PACKET, …)`. Values equal the event keys, so
+ *  the constant and the raw string are interchangeable and both infer the typed
+ *  listener. `satisfies` validates each value; the guard below enforces coverage. */
+export const EventName = {
+  TRANSPORT_STATE: 'transportState',
+  RAW_PACKET: 'rawPacket',
+  CHANNELS: 'channels',
+  CHANNEL_PRESENCE: 'channelPresence',
+  SYNC_PROGRESS: 'syncProgress',
+  CONTACTS: 'contacts',
+  DISCOVERED: 'discovered',
+  CONTACT_EVICTED: 'contactEvicted',
+  CONTACTS_FULL: 'contactsFull',
+  CONTACT_DISCOVERED: 'contactDiscovered',
+  CONTACT_OBSERVED: 'contactObserved',
+  MESSAGES: 'messages',
+  MESSAGE_UPSERTED: 'messageUpserted',
+  MESSAGE_STATE: 'messageState',
+  MESSAGE_PATH_HEARD: 'messagePathHeard',
+  OWNER: 'owner',
+  RADIO_SETTINGS: 'radioSettings',
+  REPEATER_STATUS: 'repeaterStatus',
+  REPEATER_TELEMETRY: 'repeaterTelemetry',
+  PATH_LEARNED: 'pathLearned',
+  DEVICE_IDENTITY: 'deviceIdentity',
+  AUTO_ADD_CONFIG: 'autoAddConfig',
+  TELEMETRY_POLICY: 'telemetryPolicy',
+  GPS_CONFIG: 'gpsConfig',
+  DEVICE_INFO: 'deviceInfo',
+  DEVICE_CAPABILITIES: 'deviceCapabilities',
+} as const satisfies Record<string, keyof MeshCoreEventMap>;
+
+/** Union of event-name keys (= `keyof MeshCoreEventMap`); interchangeable with `EventName` values. */
+export type EventName = keyof MeshCoreEventMap;
+
+// Compile-time drift guard: fails to build if any event key lacks an EventName constant.
+type _EventNamesCovered = keyof MeshCoreEventMap extends (typeof EventName)[keyof typeof EventName]
+  ? true
+  : never;
+const _eventNamesCovered: _EventNamesCovered = true;
+void _eventNamesCovered;
+```
+
+- [ ] **Step 4: Create the barrel**
 
 ```ts
 // src/ports.ts
@@ -172,24 +243,28 @@ Expected: FAIL — cannot find module `../../src/ports`.
 // LoopbackTransport is an adapter and lives in `Transports`, not here.
 export type { Transport } from './ports/transport';
 export { type Logger, noopLogger } from './ports/logger';
-export { type MeshCoreEventMap as EventMap, MeshCoreEvents as Events } from './ports/events';
+export {
+  EventName,
+  type MeshCoreEventMap as EventMap,
+  MeshCoreEvents as Events,
+} from './ports/events';
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `pnpm vitest run tests/namespaces/ports.test.ts`
-Expected: PASS.
+Expected: PASS (all five cases).
 
-- [ ] **Step 5: Typecheck**
+- [ ] **Step 6: Typecheck**
 
 Run: `pnpm typecheck`
-Expected: no errors.
+Expected: no errors. If a future event key were missing from `EventName`, the drift guard makes `_EventNamesCovered` resolve to `never` and `tsc` fails here.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/ports.ts tests/namespaces/ports.test.ts
-git commit -m "feat: add Ports namespace barrel (src/ports.ts)"
+git add src/ports.ts src/ports/events.ts tests/namespaces/ports.test.ts
+git commit -m "feat: add Ports namespace barrel + EventName constants"
 ```
 
 ---
@@ -274,7 +349,117 @@ git commit -m "feat: add Features namespace barrel (src/features.ts)"
 
 ---
 
-### Task 4: The surface cutover (single namespaced entry point)
+### Task 4: `Protocol.PayloadKind` payload-kind constants
+
+Additive: the `Protocol` barrel (`src/protocol.ts`) already does `export * from './protocol/onAirPackets'`, so adding the const there flows into the namespace with no barrel edit. Independent of the barrels and cutover — can run any time before docs (Task 6).
+
+**Files:**
+- Modify: `src/protocol/onAirPackets.ts` (add `PayloadKind` const/type + drift guard)
+- Test: `tests/protocol/payloadKind.test.ts`
+
+**Interfaces:**
+- Consumes: existing `OnAirPayload` union + `decodeOnAirPacket` in `protocol/onAirPackets.ts`.
+- Produces: `PayloadKind` const map (`PayloadKind.GRP_TXT === 'grpTxt'`, etc.) + `type PayloadKind = OnAirPayload['kind']`, reachable as `Protocol.PayloadKind` after the cutover. Interchangeable with raw `kind` strings.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// tests/protocol/payloadKind.test.ts
+import { describe, expect, it } from 'vitest';
+import { type OnAirPayload, PayloadKind } from '../../src/protocol/onAirPackets';
+
+describe('PayloadKind constants', () => {
+  it('maps readable names to the kind discriminant literals', () => {
+    expect(PayloadKind.ADVERT).toBe('advert');
+    expect(PayloadKind.GRP_TXT).toBe('grpTxt');
+    expect(PayloadKind.TRACE).toBe('trace');
+    expect(PayloadKind.RAW).toBe('raw');
+  });
+
+  it('narrows payload in a switch — via the constant AND the raw string', () => {
+    const payload = { kind: 'grpTxt', channelHash: '01', macHex: '0203', cipherLen: 4 } as OnAirPayload;
+
+    let viaConst: string | undefined;
+    switch (payload.kind) {
+      case PayloadKind.GRP_TXT:
+        viaConst = payload.channelHash; // narrows: channelHash is in scope
+        break;
+    }
+    expect(viaConst).toBe('01');
+
+    let viaString: number | undefined;
+    switch (payload.kind) {
+      case 'grpTxt': // raw string — equivalent, still narrows
+        viaString = payload.cipherLen;
+        break;
+    }
+    expect(viaString).toBe(4);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm vitest run tests/protocol/payloadKind.test.ts`
+Expected: FAIL — `PayloadKind` is not exported from `../../src/protocol/onAirPackets`.
+
+- [ ] **Step 3: Add `PayloadKind` to `src/protocol/onAirPackets.ts`**
+
+Insert immediately after the `OnAirPayload` union declaration (before the `PAYLOAD_TYPE_NAMES` const):
+
+```ts
+/** Named constants for the {@link OnAirPayload} `kind` discriminant, so consumers
+ *  branch on readable names instead of bare strings:
+ *  `case PayloadKind.GRP_TXT` (=== 'grpTxt'). Values equal the `kind` literals, so
+ *  the constant and the raw string are interchangeable and both narrow `payload`.
+ *  Distinct from the numeric wire enum {@link PAYLOAD_TYPE} (keys `header.payloadType`). */
+export const PayloadKind = {
+  ADVERT: 'advert',
+  TXT_MSG: 'txtMsg',
+  GRP_TXT: 'grpTxt',
+  REQ: 'req',
+  RESPONSE: 'response',
+  ANON_REQ: 'anonReq',
+  ACK: 'ack',
+  PATH: 'path',
+  TRACE: 'trace',
+  CONTROL_DISCOVER_REQ: 'controlDiscoverReq',
+  CONTROL_DISCOVER_RESP: 'controlDiscoverResp',
+  CONTROL_OTHER: 'controlOther',
+  RAW: 'raw',
+} as const satisfies Record<string, OnAirPayload['kind']>;
+
+/** Union of the `kind` discriminant values (`'advert' | 'grpTxt' | …`); interchangeable with `PayloadKind` values. */
+export type PayloadKind = OnAirPayload['kind'];
+
+// Compile-time drift guard: fails to build if any payload kind lacks a PayloadKind constant.
+type _PayloadKindsCovered = OnAirPayload['kind'] extends (typeof PayloadKind)[keyof typeof PayloadKind]
+  ? true
+  : never;
+const _payloadKindsCovered: _PayloadKindsCovered = true;
+void _payloadKindsCovered;
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pnpm vitest run tests/protocol/payloadKind.test.ts`
+Expected: PASS (both cases).
+
+- [ ] **Step 5: Typecheck**
+
+Run: `pnpm typecheck`
+Expected: no errors. The `satisfies` clause rejects a typo'd value; the drift guard rejects a missing `kind`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/protocol/onAirPackets.ts tests/protocol/payloadKind.test.ts
+git commit -m "feat: add Protocol.PayloadKind payload-kind constants"
+```
+
+---
+
+### Task 5: The surface cutover (single namespaced entry point)
 
 This task is **atomic** — it flips the public surface from the flat 3-entry layout to the single namespaced entry. Renaming `src/transports.ts` members and collapsing `package.json` `exports` both break the current examples simultaneously, so the transports edit, index rewrite, package/build rewiring, guard-test rewrite, and example updates must land together to keep `pnpm typecheck` green.
 
@@ -331,6 +516,9 @@ describe('public surface — top-level', () => {
     expect(pkg.Transports.Serial).toBeTypeOf('function');
     expect(pkg.Transports.Loopback).toBeTypeOf('function');
     expect(pkg.Ports.noopLogger).toBeDefined();
+    // Named-constant maps reachable via their namespaces.
+    expect(pkg.Protocol.PayloadKind.GRP_TXT).toBe('grpTxt');
+    expect(pkg.Ports.EventName.RAW_PACKET).toBe('rawPacket');
   });
 
   it('Features is a type-only namespace (compile-time reachable)', () => {
@@ -531,15 +719,17 @@ git commit -m "feat: collapse to single namespaced entry point"
 
 ---
 
-### Task 5: TypeDoc + docs guides
+### Task 6: TypeDoc + docs guides
 
 **Files:**
 - Modify: `docs/astro.config.mjs` (single TypeDoc entry point)
 - Modify: `docs/src/content/docs/guides/transports.md` (and any other guide importing old subpaths/symbols)
+- Modify: `docs/src/content/docs/guides/decoding-packets.md` (use `Protocol.PayloadKind`)
+- Modify: `docs/src/content/docs/guides/events-and-state.md` (use `Ports.EventName`, if it subscribes with raw strings)
 
 **Interfaces:**
-- Consumes: the namespaced `src/index.ts` from Task 4.
-- Produces: a docs build whose TypeDoc sidebar shows the six namespaces as distinct sections.
+- Consumes: the namespaced `src/index.ts` from Task 5, plus `Protocol.PayloadKind` (Task 4) and `Ports.EventName` (Task 2).
+- Produces: a docs build whose TypeDoc sidebar shows the six namespaces as distinct sections, with guide examples on the namespaced API.
 
 - [ ] **Step 1: Point TypeDoc at the single entry**
 
@@ -570,21 +760,60 @@ Replace the prose line referencing the `@andyshinn/meshcore-ts/transports` subpa
 Run: `grep -rn "meshcore-ts/transports\|meshcore-ts/protocol\|LoopbackTransport\|SerialTransport\|MeshCoreEventMap" docs/src/content`
 Fix each hit: `LoopbackTransport` → `Transports.Loopback`, `SerialTransport` → `Transports.Serial`, `MeshCoreEventMap` → `Ports.EventMap`, subpath imports → root `Transports`/`Protocol` import.
 
-- [ ] **Step 3: Build the docs**
+- [ ] **Step 3: Make the packet-decoding guide use `Protocol.PayloadKind`**
+
+In `docs/src/content/docs/guides/decoding-packets.md`, replace the aspirational example (which imported a nonexistent `PayloadTypes` and compared against `ADVERT`/`GRP_TXT`/`TRACE`) with the real, type-checked form:
+
+```ts
+import { Protocol } from '@andyshinn/meshcore-ts';
+
+session.events.on('rawPacket', (pkt) => {
+  const packet = Protocol.decodeOnAirPacket(pkt.hex); // also accepts a Uint8Array
+  console.log(packet.payloadTypeName); // e.g. 'GRP_TXT'
+
+  switch (packet.payload.kind) {
+    case Protocol.PayloadKind.ADVERT:
+      console.log(packet.payload.advert.appData.name);
+      break;
+    case Protocol.PayloadKind.GRP_TXT:
+      console.log(packet.payload.channelHash, packet.payload.cipherLen);
+      break;
+    case Protocol.PayloadKind.TRACE:
+      console.log(packet.payload.tag, packet.payload.hopCount, packet.payload.snr);
+      break;
+    // …txtMsg, req, response, anonReq, ack, path, control*, raw
+  }
+});
+```
+
+Add a one-line note that the raw discriminant strings (`case 'grpTxt':`) work too — `Protocol.PayloadKind` is optional sugar.
+
+- [ ] **Step 4: Make the events guide use `Ports.EventName` (if present)**
+
+In `docs/src/content/docs/guides/events-and-state.md`, if it subscribes with raw strings, show the constant form alongside (do not remove the string form — both are valid):
+
+```ts
+import { Ports } from '@andyshinn/meshcore-ts';
+
+session.events.on(Ports.EventName.RAW_PACKET, (pkt) => { /* … */ });
+// equivalent to: session.events.on('rawPacket', (pkt) => { … })
+```
+
+- [ ] **Step 5: Build the docs**
 
 Run: `pnpm docs:build`
 Expected: build succeeds; TypeDoc emits a Namespace page/section per `export * as` namespace (`Models`, `Errors`, `Protocol`, `Transports`, `Ports`, `Features`).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add docs/astro.config.mjs docs/src/content
-git commit -m "docs: single TypeDoc entry + namespaced guide imports"
+git commit -m "docs: single TypeDoc entry + namespaced guide imports + PayloadKind/EventName"
 ```
 
 ---
 
-### Task 6: Final full verification
+### Task 7: Final full verification
 
 **Files:** none (verification only).
 
@@ -609,17 +838,22 @@ git commit -m "chore: finalize namespace public-API migration"
 
 ## Self-Review
 
+**Task map:** 1 Models barrel · 2 Ports barrel + `EventName` · 3 Features barrel · 4 `Protocol.PayloadKind` · 5 cutover (index + transports + package/tsup + guard + examples) · 6 TypeDoc + guides · 7 final verification.
+
 **Spec coverage:**
-- Single `.` entry + six namespaces via `export * as` → Tasks 1–4 (barrels) + Task 4 (index). ✓
-- Membership rules (rich Models; bounded type-only Features; Ports = contracts; Transports = adapters incl. Loopback) → Tasks 1–4, Global Constraints table. ✓
-- Naming map (shortened adapter/event names) → Task 4 Step 3, Global Constraints. ✓
-- Errors as own namespace from `model/errors` → Task 4 Step 4. ✓
-- `package.json` exports collapse + `sideEffects: false` retained + tsup single entry → Task 4 Steps 5–6. ✓
-- TypeDoc single entry + namespace sections + `@module`-style captions (JSDoc above each `export * as`) → Task 4 Step 4 (captions) + Task 5. ✓
-- Guides + examples rewired → Task 4 Step 8, Task 5 Step 2. ✓
-- Verification contract (typecheck/test/build/lint/docs:build + guard test) → Tasks 4 & 6. ✓
+- Single `.` entry + six namespaces via `export * as` → Tasks 1–4 (barrels/consts) + Task 5 (index). ✓
+- Membership rules (rich Models; bounded type-only Features; Ports = contracts; Transports = adapters incl. Loopback) → Tasks 1–5, Global Constraints table. ✓
+- Naming map (shortened adapter/event names) → Task 5 Step 3, Global Constraints. ✓
+- Errors as own namespace from `model/errors` → Task 5 Step 4. ✓
+- **`Protocol.PayloadKind` constants (interchangeable with raw strings)** → Task 4; guard spot-check Task 5 Step 1; docs Task 6 Step 3. ✓
+- **`Ports.EventName` constants (interchangeable with raw strings)** → Task 2 (const + barrel + tests); guard spot-check Task 5 Step 1; docs Task 6 Step 4. ✓
+- Both constant maps use `as const` (not `enum`) + a compile-time drift guard → Tasks 2 & 4 Step 3, Global Constraints. ✓
+- `package.json` exports collapse + `sideEffects: false` retained + tsup single entry → Task 5 Steps 5–6. ✓
+- TypeDoc single entry + namespace sections + JSDoc captions above each `export * as` → Task 5 Step 4 (captions) + Task 6. ✓
+- Guides + examples rewired → Task 5 Step 8, Task 6 Steps 2–4. ✓
+- Verification contract (typecheck/test/build/lint/docs:build + guard test) → Tasks 5 & 7. ✓
 - Trade-offs (eager init; no heavy peer deps) — informational in spec; no task needed. ✓
 
 **Placeholder scan:** No TBD/TODO; every code/config/test step shows complete content; the example migration uses four fully-shown patterns with explicit file lists (no "similar to" hand-waving). ✓
 
-**Type consistency:** Public names are consistent across tasks — `Transports.Serial`/`.Ble`/`.Loopback`/`.createBle`/`.NORDIC_UART`, `Ports.EventMap`/`.Events`/`.noopLogger`/`.Transport`/`.Logger`, `Errors.ProtocolError`, `Protocol.BufferReader`/`.CMD`/`.RESP`, `Models.DEFAULT_RADIO_SETTINGS`. The `Features` member list matches the audited set in every place it appears (Task 3 barrel, Task 3 test, Global Constraints table). ✓
+**Type consistency:** Public names are consistent across tasks — `Transports.Serial`/`.Ble`/`.Loopback`/`.createBle`/`.NORDIC_UART`, `Ports.EventMap`/`.Events`/`.noopLogger`/`.Transport`/`.Logger`/`.EventName`, `Errors.ProtocolError`, `Protocol.BufferReader`/`.CMD`/`.RESP`/`.PayloadKind`, `Models.DEFAULT_RADIO_SETTINGS`. The `Features` member list matches the audited set everywhere (Task 3 barrel, Task 3 test, Global Constraints table). `PayloadKind`/`EventName` values match their source unions (`OnAirPayload['kind']`, `keyof MeshCoreEventMap`) and are enforced by `satisfies` + the drift guards. ✓
