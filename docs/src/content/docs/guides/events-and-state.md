@@ -33,10 +33,10 @@ transport.setState('connected');
 
 `transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`,
 `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`,
-`messages`, `messageState`, `messagePathHeard`, `owner`, `radioSettings`,
-`repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`,
-`autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`,
-`deviceCapabilities`.
+`contactObserved`, `messages`, `messageUpserted`, `messageState`,
+`messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`,
+`repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`,
+`telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
 
 All payloads are exported types — see `Ports.EventMap` in the
 [API reference](../../api/readme/).

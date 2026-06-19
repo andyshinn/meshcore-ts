@@ -25,7 +25,7 @@ interface Transport {
 > **Framing rule:** Each `onData` chunk must be **exactly one complete companion
 > frame** — which is what a single BLE GATT notification delivers.
 
-## LoopbackTransport (tests & examples)
+## Loopback (tests & examples)
 
 A ready-made `Transports.Loopback` is exported for tests and examples:
 

@@ -2,7 +2,7 @@
 
 Runnable examples for `@andyshinn/meshcore-ts`, ported from
 [meshcore.js](https://github.com/liamcottle/meshcore.js). They use the library's
-built-in transports (`SerialTransport`, `createBleTransport`) and run with `tsx`
+built-in transports (`Transports.Serial`, `Transports.createBle`) and run with `tsx`
 against the local source — no build step.
 
 ## Running
