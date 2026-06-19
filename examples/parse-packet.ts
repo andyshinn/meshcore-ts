@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { parseMeshPacket } from '@andyshinn/meshcore-ts';
+import { parseMeshPacket } from '@andyshinn/meshcore-ts/protocol';
 
 // Raw mesh-packet bytes (from meshcore.js examples/parse_packet.js).
 const bytes = Buffer.from('0200B401DF6528CC9778A56F36FE9399A5CF6B0C7EDE', 'hex');

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { parseAdvert, parseMeshPacket } from '@andyshinn/meshcore-ts';
+import { parseAdvert, parseMeshPacket } from '@andyshinn/meshcore-ts/protocol';
 
 // A meshcore:// advert URL (from meshcore.js examples/parse_advert.js).
 const advertUrl =

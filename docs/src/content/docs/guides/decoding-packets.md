@@ -33,7 +33,7 @@ performs **no decryption** (cipher bodies are reported only as a length) and
 variant.
 
 ```ts
-import { decodeOnAirPacket } from '@andyshinn/meshcore-ts';
+import { decodeOnAirPacket } from '@andyshinn/meshcore-ts/protocol';
 
 session.events.on('rawPacket', (pkt) => {
   const packet = decodeOnAirPacket(pkt.hex); // also accepts a Uint8Array

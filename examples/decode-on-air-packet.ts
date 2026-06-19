@@ -1,4 +1,4 @@
-import { decodeOnAirPacket } from '@andyshinn/meshcore-ts';
+import { decodeOnAirPacket } from '@andyshinn/meshcore-ts/protocol';
 
 // decodeOnAirPacket() structurally decodes a MeshCore on-air mesh packet — the
 // bytes carried inside PUSH_RAW_DATA (0x84) / PUSH_LOG_RX_DATA (0x88) frames —
