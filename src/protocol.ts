@@ -1,4 +1,4 @@
-// Power-user wire-codec surface: @andyshinn/meshcore-ts/protocol.
+// Power-user wire-codec surface (the `Protocol` namespace).
 // Forward-looking — lets consumers build/parse companion frames directly.
 // NOTE: paths.ts is intentionally excluded (it is model-layer, not codec).
 export * from './protocol/advert';
