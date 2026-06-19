@@ -29,6 +29,35 @@ export type OnAirPayload =
   | { kind: 'controlOther'; rawFlags: number; payloadHex: string }
   | { kind: 'raw'; payloadType: number | null; payloadHex: string };
 
+/** Named constants for the {@link OnAirPayload} `kind` discriminant, so consumers
+ *  branch on readable names instead of bare strings:
+ *  `case PayloadKind.GRP_TXT` (=== 'grpTxt'). Values equal the `kind` literals, so
+ *  the constant and the raw string are interchangeable and both narrow `payload`.
+ *  Distinct from the numeric wire enum {@link PAYLOAD_TYPE} (keys `header.payloadType`). */
+export const PayloadKind = {
+  ADVERT: 'advert',
+  TXT_MSG: 'txtMsg',
+  GRP_TXT: 'grpTxt',
+  REQ: 'req',
+  RESPONSE: 'response',
+  ANON_REQ: 'anonReq',
+  ACK: 'ack',
+  PATH: 'path',
+  TRACE: 'trace',
+  CONTROL_DISCOVER_REQ: 'controlDiscoverReq',
+  CONTROL_DISCOVER_RESP: 'controlDiscoverResp',
+  CONTROL_OTHER: 'controlOther',
+  RAW: 'raw',
+} as const satisfies Record<string, OnAirPayload['kind']>;
+
+/** Union of the `kind` discriminant values (`'advert' | 'grpTxt' | …`); interchangeable with `PayloadKind` values. */
+export type PayloadKind = OnAirPayload['kind'];
+
+// Compile-time drift guard: fails to build if any payload kind lacks a PayloadKind constant.
+type _PayloadKindsCovered = OnAirPayload['kind'] extends (typeof PayloadKind)[keyof typeof PayloadKind] ? true : never;
+const _payloadKindsCovered: _PayloadKindsCovered = true;
+void _payloadKindsCovered;
+
 // Reverse lookup: payloadType number → enum key name, for display.
 const PAYLOAD_TYPE_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(PAYLOAD_TYPE).map(([name, value]) => [value, name]),
