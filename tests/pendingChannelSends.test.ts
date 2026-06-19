@@ -73,14 +73,14 @@ describe('PendingChannelSends.register / matchObservation', () => {
 });
 
 describe('PendingChannelSends.attributeObservation', () => {
-  it('emits messagePathHeard with the messageId and observed path on a match', () => {
+  it('emits messagePathHeard with the message id and observed path on a match', () => {
     const sends = new PendingChannelSends();
     const state = new SessionState();
     const events = new MeshCoreEvents();
     state.setOwner({ name: 'Me', publicKeyHex: 'aa'.repeat(32), publicKeyShort: 'aaaa' });
     sends.register({ messageId: 'm1', channelHash: 0x42, sentAt: 900 });
 
-    const heard: Array<{ messageId: string; path: MessagePath }> = [];
+    const heard: Array<{ id: string; path: MessagePath }> = [];
     events.on('messagePathHeard', (p) => heard.push(p));
 
     const attributed = sends.attributeObservation(obs({ channelHash: 0x42 }), state, events);
@@ -88,8 +88,8 @@ describe('PendingChannelSends.attributeObservation', () => {
 
     // The event carries only the message id and the heard path — no lib state.
     expect(heard).toHaveLength(1);
-    expect(Object.keys(heard[0]).sort()).toEqual(['messageId', 'path']);
-    expect(heard[0].messageId).toBe('m1');
+    expect(Object.keys(heard[0]).sort()).toEqual(['id', 'path']);
+    expect(heard[0].id).toBe('m1');
     expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
   });
 
@@ -101,12 +101,12 @@ describe('PendingChannelSends.attributeObservation', () => {
     const events = new MeshCoreEvents();
     sends.register({ messageId: 'ghost', channelHash: 0x42, sentAt: 900 });
 
-    const heard: Array<{ messageId: string; path: MessagePath }> = [];
+    const heard: Array<{ id: string; path: MessagePath }> = [];
     events.on('messagePathHeard', (p) => heard.push(p));
 
     expect(sends.attributeObservation(obs({ channelHash: 0x42 }), state, events)).toBe(true);
     expect(heard).toHaveLength(1);
-    expect(heard[0].messageId).toBe('ghost');
+    expect(heard[0].id).toBe('ghost');
     expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
   });
 

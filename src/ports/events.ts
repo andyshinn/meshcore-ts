@@ -60,7 +60,7 @@ export interface MeshCoreEventMap {
    *  back to the message id you passed to {@link registerChannelSend}. Carries
    *  only the message id and the observed path — the library does not track
    *  message state for this; the consumer owns it. */
-  messagePathHeard: (p: { messageId: string; path: MessagePath }) => void;
+  messagePathHeard: (p: { id: string; path: MessagePath }) => void;
   owner: (owner: Owner | null) => void;
   radioSettings: (settings: RadioSettings) => void;
   repeaterStatus: (snap: RepeaterStatusSnapshot) => void;

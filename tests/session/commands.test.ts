@@ -143,15 +143,15 @@ describe('MeshCoreSession command surface', () => {
       expect(channelHash).not.toBeNull();
       session.registerChannelSend({ messageId, channelHash: channelHash as number });
 
-      const heard: Array<{ messageId: string; path: { id: string } }> = [];
-      session.events.on('messagePathHeard', (p) => heard.push({ messageId: p.messageId, path: p.path }));
+      const heard: Array<{ id: string; path: { id: string } }> = [];
+      session.events.on('messagePathHeard', (p) => heard.push({ id: p.id, path: p.path }));
 
       // A repeater relays our send — the radio surfaces it as a 0x88 log_rx frame
       // whose GRP_TXT payload carries the same channel-hash byte.
       transport.receive(logRxGrpTxtFrame(channelHash as number));
 
       expect(heard).toHaveLength(1);
-      expect(heard[0].messageId).toBe(messageId);
+      expect(heard[0].id).toBe(messageId);
       expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
     });
   });
