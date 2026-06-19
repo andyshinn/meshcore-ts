@@ -75,8 +75,11 @@ jobs:
         with:
           node-version: 22
       - name: Bump main to next dev version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm version "$TAG" --no-git-tag-version --allow-same-version
           pnpm version prepatch --preid dev --no-git-checks
           git push --follow-tags origin main
