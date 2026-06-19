@@ -23,10 +23,10 @@
 // `attributeObservation` (rather than imported as singletons) to keep this
 // module free of import cycles.
 
-import type { MeshObservation } from './meshObservations';
-import { buildPath } from './paths';
+import type { MeshObservation } from './model/meshObservations';
+import { buildPath } from './model/paths';
+import type { SessionState } from './model/state/model';
 import type { MeshCoreEvents } from './ports/events';
-import type { SessionState } from './state/model';
 
 const TTL_MS = 90_000;
 

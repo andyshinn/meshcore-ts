@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type MeshObservation, MeshObservations } from '../src/meshObservations';
+import { type MeshObservation, MeshObservations } from '../src/model/meshObservations';
 
 // Anchor all timestamps to a fixed wall clock so consumeMatching's internal
 // Date.now()-based eviction doesn't sweep the (otherwise fresh) observations.

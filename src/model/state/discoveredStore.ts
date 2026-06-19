@@ -1,4 +1,4 @@
-import { advTypeToKind, type DiscoveredContact, hopsFromOutPathLen } from '../contacts/discovered';
+import { advTypeToKind, type DiscoveredContact, hopsFromOutPathLen } from '../contacts';
 import type { PathHashSize } from '../types';
 
 /** Snake_case row shape mirroring the donor sqlite `discovered_contacts` table.

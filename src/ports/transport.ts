@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { TransportState } from '../types';
+import type { TransportState } from '../model/types';
 
 /** Byte-stream port to the radio. The library injects an implementation (BLE, serial, etc.). */
 export interface Transport {

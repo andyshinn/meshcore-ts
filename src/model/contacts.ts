@@ -1,4 +1,4 @@
-import type { ContactKind, PathHashSize } from '../types';
+import type { ContactKind, PathHashSize } from './types';
 
 /** A node we've heard an advert from. Superset of the on-radio contact list:
  *  `onRadio` marks whether it is currently committed to the radio's store. */

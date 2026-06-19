@@ -9,9 +9,9 @@ import {
   encodeSetChannel,
   getChannel,
 } from '../../src/features/channels';
+import { SessionState } from '../../src/model/state/model';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';
-import { SessionState } from '../../src/state/model';
 
 const hex = (b: Buffer) => b.toString('hex');
 

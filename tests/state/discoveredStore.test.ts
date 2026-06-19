@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DiscoveredStore } from '../../src/state/discoveredStore';
+import { DiscoveredStore } from '../../src/model/state/discoveredStore';
 
 function record(over: Partial<Parameters<DiscoveredStore['upsert']>[0]> = {}) {
   return {

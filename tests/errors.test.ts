@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FeatureDisabledError, ProtocolError } from '../src/errors';
+import { FeatureDisabledError, ProtocolError } from '../src/model/errors';
 import { ERR_CODE } from '../src/protocol/codes';
 
 describe('ERR_CODE', () => {

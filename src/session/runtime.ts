@@ -5,7 +5,7 @@ import { createDmRuntime, type DmRuntime } from '../features/directMessages';
 import { createDrainRuntime, type DrainRuntime } from '../features/drain';
 import { createPathDiagRuntime, type PathDiagRuntime } from '../features/pathDiagnostics';
 import { type AdminCorrRuntime, createAdminCorrRuntime } from '../features/repeaterAdmin';
-import { MeshObservations } from '../meshObservations';
+import { MeshObservations } from '../model/meshObservations';
 import { PendingChannelSends } from '../pendingChannelSends';
 
 /** Per-session mutable state, replacing every former module-level global. */

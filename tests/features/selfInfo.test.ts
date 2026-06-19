@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { decodeSelfInfo, encodeAppStart } from '../../src/features/selfInfo';
-import type { DeviceIdentity, RadioSettings } from '../../src/types';
+import type { DeviceIdentity, RadioSettings } from '../../src/model/types';
 import { deliver, makeSession } from '../support/harness';
 
 // De-framed RESP_SELF_INFO captured from a connected Heltec/egrmesh "Hand" node

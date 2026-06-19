@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advTypeToKind, hopsFromOutPathLen } from '../src/contacts/discovered';
+import { advTypeToKind, hopsFromOutPathLen } from '../src/model/contacts';
 
 describe('hopsFromOutPathLen', () => {
   it('treats 0xFF (OUT_PATH_UNKNOWN) as undefined', () => {

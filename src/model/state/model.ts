@@ -1,4 +1,4 @@
-import type { DiscoveredContact } from '../contacts/discovered';
+import type { DiscoveredContact } from '../contacts';
 import type {
   AutoAddConfig,
   Channel,

@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { FeatureDisabledError } from '../../src/errors';
 import type { FeatureContext } from '../../src/feature';
 import {
   createDeviceAdminRuntime,
@@ -14,6 +13,7 @@ import {
   exportPrivateKey,
   resetDeviceAdmin,
 } from '../../src/features/deviceAdmin';
+import { FeatureDisabledError } from '../../src/model/errors';
 
 const hex = (b: Buffer) => b.toString('hex');
 const KEY = 'ab'.repeat(64); // 64-byte ed25519 expanded private key

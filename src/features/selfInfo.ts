@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { Feature, FeatureContext } from '../feature';
+import type { Owner } from '../model/types';
 import { CMD, RESP } from '../protocol/codes';
-import type { Owner } from '../types';
 
 // RESP_SELF_INFO frame layout (MyMesh.cpp:1038-1070):
 //   [0]      code 0x05

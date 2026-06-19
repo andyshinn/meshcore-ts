@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { FeatureDisabledError, ProtocolTimeoutError } from '../errors';
 import type { Feature, FeatureContext } from '../feature';
+import { FeatureDisabledError, ProtocolTimeoutError } from '../model/errors';
 import { CMD, RESP } from '../protocol/codes';
 
 // Device administration (firmware: companion_radio/MyMesh.cpp). Groups the

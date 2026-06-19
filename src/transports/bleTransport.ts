@@ -1,5 +1,5 @@
+import type { TransportState } from '../model/types';
 import type { Transport } from '../ports/transport';
-import type { TransportState } from '../types';
 
 /**
  * Nordic UART Service UUIDs used by the MeshCore companion BLE interface.

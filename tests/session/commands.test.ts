@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { channelHashOf } from '../../src/paths';
+import { channelHashOf } from '../../src/model/paths';
+import type { Channel, Message } from '../../src/model/types';
 import { LoopbackTransport } from '../../src/ports/transport';
 import { MeshCoreSession } from '../../src/session/session';
-import type { Channel, Message } from '../../src/types';
 
 // A known channel with an explicit slot index so sendChannelText can address it.
 const channel: Channel = {

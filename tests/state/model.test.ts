@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SessionState } from '../../src/state/model';
+import { SessionState } from '../../src/model/state/model';
 import {
   type Channel,
   type Contact,
@@ -12,7 +12,7 @@ import {
   DEFAULT_TELEMETRY_POLICY,
   type Message,
   type MessagePath,
-} from '../../src/types';
+} from '../../src/model/types';
 
 function path(id: string): MessagePath {
   return { id, hops: [], hashMode: 1, finalSnr: 0 };

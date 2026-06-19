@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { ProtocolError } from '../errors';
 import type { Feature, FeatureContext } from '../feature';
+import { ProtocolError } from '../model/errors';
 import { CMD, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
 import { scheduleContactRefresh } from './contacts';

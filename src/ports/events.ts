@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events';
-import type { DiscoveredContact } from '../contacts/discovered';
 import type { ContactRecord, ContactSource } from '../features/contacts';
-import type { MeshSource } from '../protocol/frame';
+import type { DiscoveredContact } from '../model/contacts';
 import type {
   AutoAddConfig,
   Channel,
@@ -22,7 +21,8 @@ import type {
   SyncProgress,
   TelemetryPolicy,
   TransportState,
-} from '../types';
+} from '../model/types';
+import type { MeshSource } from '../protocol/frame';
 
 /**
  * Strongly-typed map of every event the library emits. The session owns a

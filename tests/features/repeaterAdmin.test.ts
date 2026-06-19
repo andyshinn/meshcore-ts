@@ -17,14 +17,14 @@ import {
   resetAdmin,
   sendBinaryReq,
 } from '../../src/features/repeaterAdmin';
-import { MeshObservations } from '../../src/meshObservations';
+import { MeshObservations } from '../../src/model/meshObservations';
+import { SessionState } from '../../src/model/state/model';
+import type { Contact } from '../../src/model/types';
 import { PendingChannelSends } from '../../src/pendingChannelSends';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';
 import { PUSH, TXT_TYPE } from '../../src/protocol/codes';
 import { AdminSessionStore } from '../../src/session/adminSessions';
-import { SessionState } from '../../src/state/model';
-import type { Contact } from '../../src/types';
 
 // A full per-session ctx: real MeshCoreEvents + SessionState + AdminSessionStore
 // + rt (with adminCorr under test plus the sibling rt factories), capturing writes.

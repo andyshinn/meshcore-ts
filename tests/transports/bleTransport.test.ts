@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { TransportState } from '../../src/model/types';
 import { BleTransport, createBleTransport, NORDIC_UART } from '../../src/transports/bleTransport';
-import type { TransportState } from '../../src/types';
 
 describe('NORDIC_UART', () => {
   it('exposes the companion BLE service + characteristic UUIDs', () => {

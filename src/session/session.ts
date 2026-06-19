@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../errors';
 import type { ContactsSyncSignal, FeatureContext } from '../feature';
 import { encodeSetAdvertLatLon, encodeSetAdvertName, encodeSetOtherParams } from '../features/advert';
 import { type AutoAddFlagsInput, autoAddFeature, requestAutoAddConfig, setAutoAddConfig } from '../features/autoAdd';
@@ -39,6 +38,10 @@ import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '.
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
+import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../model/errors';
+import { SessionState } from '../model/state/model';
+import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../model/types';
+import { DEFAULT_SYNC_PROGRESS } from '../model/types';
 import { MeshCoreEvents } from '../ports/events';
 import { type Logger, noopLogger } from '../ports/logger';
 import type { Transport } from '../ports/transport';
@@ -56,9 +59,6 @@ import type {
   TraceData,
 } from '../protocol/repeater';
 import { FeatureRegistry } from '../registry';
-import { SessionState } from '../state/model';
-import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../types';
-import { DEFAULT_SYNC_PROGRESS } from '../types';
 import { type AdminMode, AdminSessionStore } from './adminSessions';
 import { createSessionRuntime, type SessionRuntime } from './runtime';
 

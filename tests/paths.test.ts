@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildPath, channelHashOf } from '../src/paths';
-import type { Channel } from '../src/types';
+import { buildPath, channelHashOf } from '../src/model/paths';
+import type { Channel } from '../src/model/types';
 
 function channel(secretHex?: string): Channel {
   return { key: 'ch:test', name: 'test', kind: 'public', secretHex };
