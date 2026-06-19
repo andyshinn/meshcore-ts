@@ -315,12 +315,11 @@ export type ContactSource = 'sync' | 'advert';
 
 - [ ] **Step 4: Remove the declarations from `features/contacts.ts` and import them instead**
 
-In `src/features/contacts.ts`, delete the `ContactRecord` interface block (the `export interface ContactRecord { … }` spanning the `publicKeyHex … lastmod` fields) and delete the line `export type ContactSource = 'sync' | 'advert';`. Then add an import near the top of the file (with the other `../model` imports), and re-export so existing deep references inside the feature keep resolving:
+In `src/features/contacts.ts`, delete the `ContactRecord` interface block (the `export interface ContactRecord { … }` spanning the `publicKeyHex … lastmod` fields) and delete the line `export type ContactSource = 'sync' | 'advert';`. Then add a plain import near the top of the file (with the other `../model` imports) — `contacts.ts` itself uses both types in its function signatures, so it needs them:
 ```ts
 import type { ContactRecord, ContactSource } from '../model/contactTypes';
-export type { ContactRecord, ContactSource } from '../model/contactTypes';
 ```
-(The `export type` re-export keeps any intra-`features` references valid without further edits; the public surface is still controlled by the root barrel.)
+Do **not** re-export them from `contacts.ts`: after Step 5 re-points `ports/events.ts`, nothing imports these names from `features/contacts`, so a re-export would be dead code. The public surface is controlled solely by the root barrel (Task 7).
 
 - [ ] **Step 5: Re-point `ports/events.ts`**
 
