@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import type { FeatureContext } from '../../src/feature';
 import {
   createChannelsRuntime,
   decodeChannelInfo,
@@ -9,6 +8,7 @@ import {
   encodeSetChannel,
   getChannel,
 } from '../../src/features/channels';
+import type { FeatureContext } from '../../src/features/feature';
 import { SessionState } from '../../src/model/state/model';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';

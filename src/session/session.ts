@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import type { ContactsSyncSignal, FeatureContext } from '../feature';
 import { encodeSetAdvertLatLon, encodeSetAdvertName, encodeSetOtherParams } from '../features/advert';
 import { type AutoAddFlagsInput, autoAddFeature, requestAutoAddConfig, setAutoAddConfig } from '../features/autoAdd';
 import { battStorageFeature, encodeGetBattAndStorage } from '../features/battStorage';
@@ -27,12 +26,14 @@ import * as deviceAdmin from '../features/deviceAdmin';
 import { deviceInfoFeature, encodeDeviceQuery } from '../features/deviceInfo';
 import * as directMessages from '../features/directMessages';
 import { drainFeature, resetDrain, scheduleDrain } from '../features/drain';
+import type { ContactsSyncSignal, FeatureContext } from '../features/feature';
 import * as floodScope from '../features/floodScope';
 import * as misc from '../features/misc';
 import * as pathDiagnostics from '../features/pathDiagnostics';
 import { encodeSetPathHashMode, pathHashSizeToMode } from '../features/pathHash';
 import { encodeSetRadioParams, encodeSetRadioTxPower } from '../features/radioParams';
 import * as rawData from '../features/rawData';
+import { FeatureRegistry } from '../features/registry';
 import * as repeaterAdmin from '../features/repeaterAdmin';
 import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '../features/selfInfo';
 import * as signing from '../features/signing';
@@ -58,7 +59,6 @@ import type {
   OwnerInfo,
   TraceData,
 } from '../protocol/repeater';
-import { FeatureRegistry } from '../registry';
 import { type AdminMode, AdminSessionStore } from './adminSessions';
 import { createSessionRuntime, type SessionRuntime } from './runtime';
 

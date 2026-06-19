@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import type { FeatureContext } from '../feature';
 import { CMD, RESP } from '../protocol/codes';
+import type { FeatureContext } from './feature';
 
 // Message signing (firmware: companion_radio/MyMesh.cpp:1712-1743). The device
 // signs arbitrary bytes with its ed25519 identity via a three-step state

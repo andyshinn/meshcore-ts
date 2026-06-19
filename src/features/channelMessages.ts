@@ -1,11 +1,11 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import type { Feature, FeatureContext } from '../feature';
 import { buildPath, channelHashOf } from '../model/paths';
 import type { Message, MessagePath } from '../model/types';
 import { CMD, RESP } from '../protocol/codes';
 import * as channels from './channels';
 import * as drain from './drain';
+import type { Feature, FeatureContext } from './feature';
 
 // ---- Encoder -----------------------------------------------------------
 

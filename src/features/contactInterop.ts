@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
-import type { FeatureContext } from '../feature';
 import { CMD, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
+import type { FeatureContext } from './feature';
 
 // Contact interop (firmware: companion_radio/MyMesh.cpp:1298-1353). Share, export
 // and import contacts as serialized advert blobs. The blob is opaque here — the

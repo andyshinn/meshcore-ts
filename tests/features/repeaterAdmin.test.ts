@@ -1,11 +1,11 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import type { FeatureContext } from '../../src/feature';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
 import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
 import { createDmRuntime, directMessagesFeature } from '../../src/features/directMessages';
 import { createDrainRuntime } from '../../src/features/drain';
+import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
 import {
   createAdminCorrRuntime,

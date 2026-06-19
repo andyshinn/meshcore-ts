@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import type { FeatureContext } from '../feature';
 import { CMD, RESP } from '../protocol/codes';
+import type { FeatureContext } from './feature';
 
 const SCOPE_KEY_LEN = 16;
 const SCOPE_NAME_LEN = 31;

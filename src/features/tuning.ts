@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import type { FeatureContext } from '../feature';
 import { CMD, RESP } from '../protocol/codes';
+import type { FeatureContext } from './feature';
 
 // Radio airtime/backoff tuning (firmware: companion_radio/MyMesh.cpp:1411-1428).
 // Both params are floats on the device; the wire carries them as `×1000` u32 LE

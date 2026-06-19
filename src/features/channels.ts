@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import type { Feature, FeatureContext } from '../feature';
 import type { Channel } from '../model/types';
 import { CMD, RESP } from '../protocol/codes';
+import type { Feature, FeatureContext } from './feature';
 
 // How long to wait for RESP_OK / RESP_ERR after a SET_CHANNEL write before
 // giving up. The radio normally responds within ~50ms; 2s leaves slack for a

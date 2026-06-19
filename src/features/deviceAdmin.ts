@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
-import type { Feature, FeatureContext } from '../feature';
 import { FeatureDisabledError, ProtocolTimeoutError } from '../model/errors';
 import { CMD, RESP } from '../protocol/codes';
+import type { Feature, FeatureContext } from './feature';
 
 // Device administration (firmware: companion_radio/MyMesh.cpp). Groups the
 // build-gated private-key export/import, the BLE-PIN setter, and factory reset.

@@ -1,10 +1,10 @@
 import type { Buffer } from 'node:buffer';
-import type { SessionState } from './model/state/model';
-import type { TransportState } from './model/types';
-import type { MeshCoreEvents } from './ports/events';
-import type { Logger } from './ports/logger';
-import type { AdminSessionStore } from './session/adminSessions';
-import type { SessionRuntime } from './session/runtime';
+import type { SessionState } from '../model/state/model';
+import type { TransportState } from '../model/types';
+import type { MeshCoreEvents } from '../ports/events';
+import type { Logger } from '../ports/logger';
+import type { AdminSessionStore } from '../session/adminSessions';
+import type { SessionRuntime } from '../session/runtime';
 
 /** Contact-sync coordination signal emitted by the contacts feature while a
  *  GET_CONTACTS iteration streams in. The session forwards it to the

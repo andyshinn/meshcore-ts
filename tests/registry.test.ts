@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
-import type { Feature, FeatureContext } from '../src/feature';
-import { FeatureRegistry } from '../src/registry';
+import type { Feature, FeatureContext } from '../src/features/feature';
+import { FeatureRegistry } from '../src/features/registry';
 
 function fakeFeature(handles: number[], handle = vi.fn()): Feature {
   return { handles, handle };

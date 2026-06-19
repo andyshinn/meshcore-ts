@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import type { FeatureContext } from '../../src/feature';
 import {
   createDeviceAdminRuntime,
   type DeviceAdminRuntime,
@@ -13,6 +12,7 @@ import {
   exportPrivateKey,
   resetDeviceAdmin,
 } from '../../src/features/deviceAdmin';
+import type { FeatureContext } from '../../src/features/feature';
 import { FeatureDisabledError } from '../../src/model/errors';
 
 const hex = (b: Buffer) => b.toString('hex');

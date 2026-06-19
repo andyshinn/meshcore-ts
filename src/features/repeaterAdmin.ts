@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer';
-import type { Feature, FeatureContext } from '../feature';
 import { PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
@@ -32,6 +31,7 @@ import {
 } from '../protocol/repeater';
 import type { AdminMode, AdminRole } from '../session/adminSessions';
 import * as directMessages from './directMessages';
+import type { Feature, FeatureContext } from './feature';
 
 /** How a repeater login was actually dispatched, so the UI can label the toast:
  *  `'direct'` (companion-side CMD_SEND_LOGIN), `'path'` (mesh-routed over a known

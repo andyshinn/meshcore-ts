@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
-import type { Feature, FeatureContext } from '../feature';
 import type { Contact, Message, MessageState } from '../model/types';
 import { CMD, PUSH, RESP, TXT_TYPE } from '../protocol/codes';
 import { encodeResetPath } from './contacts';
 import * as drain from './drain';
+import type { Feature, FeatureContext } from './feature';
 
 // After RESP_SENT lands we hold the expected_ack hash → message id mapping
 // until a PUSH_SEND_CONFIRMED arrives (or until ACK_RETENTION_MS).

@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer';
-import type { Feature, FeatureContext } from '../feature';
 import { BufferReader, BufferWriter } from '../protocol/buffer';
 import { CMD, RESP } from '../protocol/codes';
+import type { Feature, FeatureContext } from './feature';
 
 export interface AutoAddFlagsInput {
   chat: boolean;

@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer';
-import type { FeatureContext } from '../feature';
 import { BufferReader, BufferWriter } from '../protocol/buffer';
 import { CMD, RESP } from '../protocol/codes';
+import type { FeatureContext } from './feature';
 
 // CMD_GET_DEVICE_TIME: [0x05]. Replies RESP_CURR_TIME.
 export function encodeGetDeviceTime(): Buffer {
