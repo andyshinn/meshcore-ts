@@ -15,4 +15,7 @@ export interface ContactRecord {
   lastmod: number;
 }
 
+/** Where an ingested contact was heard: `'sync'` (RESP_CONTACT during the
+ *  GET_CONTACTS handshake — always on-radio) or `'advert'` (live PUSH_NEW_ADVERT
+ *  — on-radio only if already in the store). */
 export type ContactSource = 'sync' | 'advert';

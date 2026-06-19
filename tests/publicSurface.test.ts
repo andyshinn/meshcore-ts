@@ -14,7 +14,8 @@ describe('public surface — core barrel', () => {
       'UnknownContactError',
       'VERSION',
     ];
-    expect(Object.keys(core).sort()).toEqual(expected);
+    // Sort both sides so reordering the `expected` literal can't break this spuriously.
+    expect(Object.keys(core).sort()).toEqual([...expected].sort());
   });
 });
 
