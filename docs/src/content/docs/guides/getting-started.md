@@ -22,13 +22,13 @@ pnpm add @andyshinn/meshcore-ts
 
 ## Construct a session and send a message
 
-The exported `LoopbackTransport` lets you run the whole flow without hardware —
+The exported `Transports.Loopback` lets you run the whole flow without hardware —
 swap it for your BLE/serial adapter later.
 
 ```ts
-import { MeshCoreSession, LoopbackTransport } from '@andyshinn/meshcore-ts';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 
-const transport = new LoopbackTransport(); // swap for your BLE/serial adapter
+const transport = new Transports.Loopback(); // swap for your BLE/serial adapter
 const session = new MeshCoreSession({ transport /*, logger, appName, appVersion */ });
 
 // Subscribe BEFORE connecting so you don't miss the handshake.

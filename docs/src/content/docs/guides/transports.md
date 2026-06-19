@@ -12,6 +12,8 @@ stay **your** responsibility; they are intentionally not in this library.
 ## The interface
 
 ```ts
+import { Ports } from '@andyshinn/meshcore-ts';
+
 interface Transport {
   send(bytes: Uint8Array): Promise<void>;        // write one companion frame
   onData(cb: (chunk: Uint8Array) => void): void; // one complete frame per call
@@ -25,16 +27,16 @@ interface Transport {
 
 ## LoopbackTransport (tests & examples)
 
-A ready-made `LoopbackTransport` is exported for tests and examples:
+A ready-made `Transports.Loopback` is exported for tests and examples:
 
 - `send` captures outbound frames to `.sent`
 - `.receive(bytes)` / `.receiveHex(hex)` deliver inbound frames
 - `.setState(s)` drives connection state
 
 ```ts
-import { LoopbackTransport } from '@andyshinn/meshcore-ts';
+import { Transports } from '@andyshinn/meshcore-ts';
 
-const transport = new LoopbackTransport();
+const transport = new Transports.Loopback();
 transport.setState('connected');     // drive the session's connect handshake
 transport.receiveHex('84...');       // feed an inbound companion frame
 console.log(transport.sent);         // inspect what the session wrote
@@ -43,7 +45,9 @@ console.log(transport.sent);         // inspect what the session wrote
 ## Implementing a real transport (sketch)
 
 ```ts
-class BleTransport implements Transport {
+import { Ports } from '@andyshinn/meshcore-ts';
+
+class BleTransport implements Ports.Transport {
   #dataCb?: (c: Uint8Array) => void;
   #stateCb?: (s: TransportState) => void;
   #state: TransportState = 'idle';
@@ -79,35 +83,32 @@ See the [events and state model](../events-and-state/) next, or the
 
 ## Built-in transport adapters
 
-The `@andyshinn/meshcore-ts/transports` subpath ships ready-made adapters so you
-don't have to write the boilerplate above for the two most common hardware
-transports.
+The `Transports` namespace ships ready-made adapters so you don't have to write
+the boilerplate above for the two most common hardware transports.
 
 ## Serial (node-serialport)
 
 ```ts
 import { SerialPort } from 'serialport';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 
 const port = new SerialPort({ path: '/dev/ttyUSB0', baudRate: 115200 });
-const session = new MeshCoreSession({ transport: new SerialTransport(port) });
-session.start(); // SerialTransport observes open/close/error; it does not open the port
+const session = new MeshCoreSession({ transport: new Transports.Serial(port) });
+session.start(); // Transports.Serial observes open/close/error; it does not open the port
 ```
 
-`SerialTransport` frames the MeshCore serial protocol for you. You own opening
+`Transports.Serial` frames the MeshCore serial protocol for you. You own opening
 and closing the port.
 
 ## BLE (noble)
 
 ```ts
 import noble from '@abandonware/noble';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { createBleTransport, NORDIC_UART } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 
 // After you have connected `peripheral` and discovered `rxChar`/`txChar`
-// for NORDIC_UART.rxWrite / NORDIC_UART.txNotify:
-const transport = createBleTransport({
+// for Transports.NORDIC_UART.rxWrite / Transports.NORDIC_UART.txNotify:
+const transport = Transports.createBle({
   write: (bytes) => rxChar.writeAsync(Buffer.from(bytes), true),
   subscribe: (onBytes) => {
     txChar.on('data', (data: Buffer) => onBytes(new Uint8Array(data)));
@@ -125,10 +126,9 @@ session.start();
 
 ```ts
 import { Buffer } from 'buffer';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { createBleTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 
-const transport = createBleTransport({
+const transport = Transports.createBle({
   write: (bytes) =>
     device.writeCharacteristicWithResponseForService(
       service, rxUuid, Buffer.from(bytes).toString('base64'),

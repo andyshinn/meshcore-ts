@@ -15,9 +15,15 @@ Subscribe **before** driving the transport to `connected` so you observe the
 full handshake and initial sync:
 
 ```ts
+import { Ports } from '@andyshinn/meshcore-ts';
+
 session.events.on('owner', (owner) => console.log('this device:', owner?.name));
 session.events.on('contacts', (contacts) => persistContacts(contacts));
 session.events.on('syncProgress', (p) => console.log(p.phase, p.contacts));
+
+// Named constants are available for every event key — both forms are equivalent:
+session.events.on(Ports.EventName.RAW_PACKET, (pkt) => { /* … */ });
+// equivalent to: session.events.on('rawPacket', (pkt) => { … })
 
 session.start();
 transport.setState('connected');
@@ -32,7 +38,7 @@ transport.setState('connected');
 `autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`,
 `deviceCapabilities`.
 
-All payloads are exported types — see `MeshCoreEventMap` in the
+All payloads are exported types — see `Ports.EventMap` in the
 [API reference](../../api/readme/).
 
 There is intentionally no generic `error` event. Specific recoverable

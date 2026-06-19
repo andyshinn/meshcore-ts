@@ -33,26 +33,29 @@ performs **no decryption** (cipher bodies are reported only as a length) and
 variant.
 
 ```ts
-import { decodeOnAirPacket } from '@andyshinn/meshcore-ts/protocol';
+import { Protocol } from '@andyshinn/meshcore-ts';
 
 session.events.on('rawPacket', (pkt) => {
-  const packet = decodeOnAirPacket(pkt.hex); // also accepts a Uint8Array
+  const packet = Protocol.decodeOnAirPacket(pkt.hex); // also accepts a Uint8Array
   console.log(packet.payloadTypeName); // e.g. 'GRP_TXT'
 
   switch (packet.payload.kind) {
-    case 'advert':
+    case Protocol.PayloadKind.ADVERT:
       console.log(packet.payload.advert.appData.name);
       break;
-    case 'grpTxt':
+    case Protocol.PayloadKind.GRP_TXT:
       console.log(packet.payload.channelHash, packet.payload.cipherLen);
       break;
-    case 'trace':
+    case Protocol.PayloadKind.TRACE:
       console.log(packet.payload.tag, packet.payload.hopCount, packet.payload.snr);
       break;
     // …txtMsg, req, response, anonReq, ack, path, control*, raw
   }
 });
 ```
+
+> `Protocol.PayloadKind` is optional sugar — the raw discriminant strings
+> (`case 'grpTxt':`) work equally well in the switch.
 
 `decodeOnAirPacket` returns `{ header, payloadTypeName, payload }`:
 

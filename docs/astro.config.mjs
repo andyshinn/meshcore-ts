@@ -27,7 +27,7 @@ export default defineConfig({
       plugins: [
         starlightLlmsTxt(),
         starlightTypeDoc({
-          entryPoints: ['../src/index.ts', '../src/protocol.ts', '../src/transports.ts'],
+          entryPoints: ['../src/index.ts'],
           tsconfig: '../tsconfig.json',
           typeDoc: {
             // Formatting: code blocks for signatures, tables for parameters.
