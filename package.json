@@ -1,6 +1,6 @@
 {
   "name": "@andyshinn/meshcore-ts",
-  "version": "0.1.4-dev.0",
+  "version": "0.2.1-dev.0",
   "description": "Application-agnostic MeshCore companion-protocol library (Node, TypeScript)",
   "license": "MIT",
   "repository": {
