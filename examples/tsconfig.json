@@ -5,7 +5,8 @@
     "rootDir": "..",
     "paths": {
       "@andyshinn/meshcore-ts": ["../src/index"],
-      "@andyshinn/meshcore-ts/transports": ["../src/transports/index"]
+      "@andyshinn/meshcore-ts/protocol": ["../src/protocol"],
+      "@andyshinn/meshcore-ts/transports": ["../src/transports"]
     }
   },
   "include": ["./**/*.ts", "../src"]
