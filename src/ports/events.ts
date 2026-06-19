@@ -70,6 +70,48 @@ export interface MeshCoreEventMap {
   deviceCapabilities: (caps: DeviceCapabilities) => void;
 }
 
+/** Named constants for every key in {@link MeshCoreEventMap}, so consumers may
+ *  subscribe by readable name instead of a bare string:
+ *  `session.events.on(EventName.RAW_PACKET, …)`. Values equal the event keys, so
+ *  the constant and the raw string are interchangeable and both infer the typed
+ *  listener. `satisfies` validates each value; the guard below enforces coverage. */
+export const EventName = {
+  TRANSPORT_STATE: 'transportState',
+  RAW_PACKET: 'rawPacket',
+  CHANNELS: 'channels',
+  CHANNEL_PRESENCE: 'channelPresence',
+  SYNC_PROGRESS: 'syncProgress',
+  CONTACTS: 'contacts',
+  DISCOVERED: 'discovered',
+  CONTACT_EVICTED: 'contactEvicted',
+  CONTACTS_FULL: 'contactsFull',
+  CONTACT_DISCOVERED: 'contactDiscovered',
+  CONTACT_OBSERVED: 'contactObserved',
+  MESSAGES: 'messages',
+  MESSAGE_UPSERTED: 'messageUpserted',
+  MESSAGE_STATE: 'messageState',
+  MESSAGE_PATH_HEARD: 'messagePathHeard',
+  OWNER: 'owner',
+  RADIO_SETTINGS: 'radioSettings',
+  REPEATER_STATUS: 'repeaterStatus',
+  REPEATER_TELEMETRY: 'repeaterTelemetry',
+  PATH_LEARNED: 'pathLearned',
+  DEVICE_IDENTITY: 'deviceIdentity',
+  AUTO_ADD_CONFIG: 'autoAddConfig',
+  TELEMETRY_POLICY: 'telemetryPolicy',
+  GPS_CONFIG: 'gpsConfig',
+  DEVICE_INFO: 'deviceInfo',
+  DEVICE_CAPABILITIES: 'deviceCapabilities',
+} as const satisfies Record<string, keyof MeshCoreEventMap>;
+
+/** Union of event-name keys (= `keyof MeshCoreEventMap`); interchangeable with `EventName` values. */
+export type EventName = keyof MeshCoreEventMap;
+
+// Compile-time drift guard: fails to build if any event key lacks an EventName constant.
+type _EventNamesCovered = keyof MeshCoreEventMap extends (typeof EventName)[keyof typeof EventName] ? true : never;
+const _eventNamesCovered: _EventNamesCovered = true;
+void _eventNamesCovered;
+
 /** The shape `node:events` expects for any registered listener. */
 type RawListener = (...args: unknown[]) => void;
 
