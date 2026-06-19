@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 describe('decodeOnAirPacket — control', () => {
   it('decodes a NodeDiscoverResp (subType 0x90)', () => {

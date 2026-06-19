@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 describe('decodeOnAirPacket — core', () => {
   it('returns a null header + raw fallback for bytes that are not a mesh packet', () => {

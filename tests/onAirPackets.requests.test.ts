@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 describe('decodeOnAirPacket — request / response / anon', () => {
   it('decodes a REQ into dest/src hash + mac + cipher length', () => {

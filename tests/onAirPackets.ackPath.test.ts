@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 describe('decodeOnAirPacket — ack + path', () => {
   it('decodes an ACK checksum as raw wire-order hex (4 bytes)', () => {

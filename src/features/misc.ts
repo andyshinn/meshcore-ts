@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
-import { CMD, RESP } from '../codes';
 import type { FeatureContext } from '../feature';
-import { parsePublicKey } from '../pubkey';
+import { CMD, RESP } from '../protocol/codes';
+import { parsePublicKey } from '../protocol/pubkey';
 
 /**
  * An inclusive frequency range the radio is permitted to repeat on.

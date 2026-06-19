@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { CMD, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
 import { buildPath, channelHashOf } from '../paths';
+import { CMD, RESP } from '../protocol/codes';
 import type { Message, MessagePath } from '../types';
 import * as channels from './channels';
 import * as drain from './drain';

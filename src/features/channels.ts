@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { CMD, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { CMD, RESP } from '../protocol/codes';
 import type { Channel } from '../types';
 
 // How long to wait for RESP_OK / RESP_ERR after a SET_CHANNEL write before

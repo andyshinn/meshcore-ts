@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { DiscoveredContact } from '../contacts/discovered';
 import type { ContactRecord, ContactSource } from '../features/contacts';
-import type { MeshSource } from '../frame';
+import type { MeshSource } from '../protocol/frame';
 import type {
   AutoAddConfig,
   Channel,

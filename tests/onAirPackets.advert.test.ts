@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 // Full advert packet (header 0x11 → FLOOD/ADVERT, empty path) from
 // meshcore-decoder's packet-structure fixtures.

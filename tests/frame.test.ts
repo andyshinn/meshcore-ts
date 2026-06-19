@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { parseCompanionFrame } from '../src/frame';
+import { parseCompanionFrame } from '../src/protocol/frame';
 
 describe('parseCompanionFrame', () => {
   it('decodes a PUSH_LOG_RX_DATA (0x88) frame as a log_rx mesh packet', () => {

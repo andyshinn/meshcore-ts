@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { TXT_TYPE } from '../../src/codes';
 import type { FeatureContext } from '../../src/feature';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
@@ -25,6 +24,7 @@ import { MeshObservations } from '../../src/meshObservations';
 import { PendingChannelSends } from '../../src/pendingChannelSends';
 import { MeshCoreEvents } from '../../src/ports/events';
 import { noopLogger } from '../../src/ports/logger';
+import { TXT_TYPE } from '../../src/protocol/codes';
 import { SessionState } from '../../src/state/model';
 import type { Contact } from '../../src/types';
 

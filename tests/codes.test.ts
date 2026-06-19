@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANON_REQ_TYPE, getAnonReqTypeName, getRequestTypeName, REQ_TYPE } from '../src/codes';
+import { ANON_REQ_TYPE, getAnonReqTypeName, getRequestTypeName, REQ_TYPE } from '../src/protocol/codes';
 
 describe('getRequestTypeName', () => {
   it('maps a known REQ_TYPE byte to its enum key name', () => {

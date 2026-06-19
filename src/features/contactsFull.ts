@@ -1,5 +1,5 @@
-import { PUSH } from '../codes';
 import type { Feature } from '../feature';
+import { PUSH } from '../protocol/codes';
 
 // PUSH_CODE_CONTACTS_FULL (0x90): the radio's contact store is full and a new
 // advert could not be auto-added (overwrite-oldest off / all favourites). There

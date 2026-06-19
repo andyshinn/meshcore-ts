@@ -1,6 +1,6 @@
 import type { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { buildReboot, buildSendSelfAdvert } from '../src/encode';
+import { buildReboot, buildSendSelfAdvert } from '../src/protocol/encode';
 
 const hex = (b: Buffer) => b.toString('hex');
 

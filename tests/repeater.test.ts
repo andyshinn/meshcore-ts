@@ -15,7 +15,7 @@ import {
   parseStatusResponse,
   parseTelemetryResponse,
   parseTraceData,
-} from '../src/repeater';
+} from '../src/protocol/repeater';
 
 const hex = (b: Buffer) => b.toString('hex');
 const pk = 'aa'.repeat(32);

@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer';
-import { BufferReader, BufferWriter } from '../buffer';
-import { CMD, RESP } from '../codes';
 import type { Feature } from '../feature';
+import { BufferReader, BufferWriter } from '../protocol/buffer';
+import { CMD, RESP } from '../protocol/codes';
 
 export interface BattAndStorage {
   batteryMv: number;

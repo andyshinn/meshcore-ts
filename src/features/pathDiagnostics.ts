@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { CMD, PUSH, RESP } from '../codes';
 import { ProtocolError } from '../errors';
 import type { Feature, FeatureContext } from '../feature';
-import { parsePublicKey } from '../pubkey';
+import { CMD, PUSH, RESP } from '../protocol/codes';
+import { parsePublicKey } from '../protocol/pubkey';
 import { scheduleContactRefresh } from './contacts';
 
 // Path diagnostics (firmware: companion_radio/MyMesh.cpp). Two queries plus a

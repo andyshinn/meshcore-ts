@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { CMD, PUSH, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { CMD, PUSH, RESP } from '../protocol/codes';
 import * as drain from './drain';
 
 // Raw / control / channel datagrams (firmware: companion_radio/MyMesh.cpp).

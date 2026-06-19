@@ -1,7 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { ADV_TYPE, ERR_CODE, RESP, type STATS_TYPE } from '../codes';
-import { buildReboot, buildSendSelfAdvert } from '../encode';
 import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../errors';
 import type { ContactsSyncSignal, FeatureContext } from '../feature';
 import { encodeSetAdvertLatLon, encodeSetAdvertName, encodeSetOtherParams } from '../features/advert';
@@ -41,13 +39,23 @@ import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '.
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
-import { parseCompanionFrame } from '../frame';
-import { PAYLOAD_TYPE, parseMeshPacket } from '../meshPacket';
 import { MeshCoreEvents } from '../ports/events';
 import { type Logger, noopLogger } from '../ports/logger';
 import type { Transport } from '../ports/transport';
+import { ADV_TYPE, ERR_CODE, RESP, type STATS_TYPE } from '../protocol/codes';
+import { buildReboot, buildSendSelfAdvert } from '../protocol/encode';
+import { parseCompanionFrame } from '../protocol/frame';
+import { PAYLOAD_TYPE, parseMeshPacket } from '../protocol/meshPacket';
+import type {
+  AclEntry,
+  AvgMinMaxResult,
+  LocalStats,
+  LoginSuccess,
+  NeighboursPage,
+  OwnerInfo,
+  TraceData,
+} from '../protocol/repeater';
 import { FeatureRegistry } from '../registry';
-import type { AclEntry, AvgMinMaxResult, LocalStats, LoginSuccess, NeighboursPage, OwnerInfo, TraceData } from '../repeater';
 import { SessionState } from '../state/model';
 import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../types';
 import { DEFAULT_SYNC_PROGRESS } from '../types';

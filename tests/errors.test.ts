@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ERR_CODE } from '../src/codes';
 import { FeatureDisabledError, ProtocolError } from '../src/errors';
+import { ERR_CODE } from '../src/protocol/codes';
 
 describe('ERR_CODE', () => {
   it('covers the firmware error set', () => {

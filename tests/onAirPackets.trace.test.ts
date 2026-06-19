@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeOnAirPacket } from '../src/onAirPackets';
+import { decodeOnAirPacket } from '../src/protocol/onAirPackets';
 
 describe('decodeOnAirPacket — trace', () => {
   it('decodes a single-hop trace (tag LE u32, flags 0 → 1-byte hashes)', () => {

@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { ADV_TYPE, CMD, PUSH, RESP } from '../codes';
 import { advTypeToKind, hopsFromOutPathLen } from '../contacts/discovered';
 import type { Feature, FeatureContext } from '../feature';
-import { parsePublicKey } from '../pubkey';
+import { ADV_TYPE, CMD, PUSH, RESP } from '../protocol/codes';
+import { parsePublicKey } from '../protocol/pubkey';
 import type { Contact } from '../types';
 
 // ---- Wire types --------------------------------------------------------

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { CMD } from '../codes';
+import { CMD } from '../protocol/codes';
 
 // CMD_SET_PATH_HASH_MODE: [0x3d][0x00][mode u8]. The 0x00 is a required
 // discriminator byte — firmware MyMesh.cpp:1431 gates the handler on

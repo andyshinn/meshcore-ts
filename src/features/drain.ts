@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { CMD, PUSH, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { CMD, PUSH, RESP } from '../protocol/codes';
 
 // Backoff on the inbox-pump. The bridge's InboxRouter already serialises 0x0a
 // across proxy clients; we issue our own 0x0a but pace ourselves so we don't

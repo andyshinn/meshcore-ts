@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { CMD } from '../codes';
+import { CMD } from '../protocol/codes';
 
 // CMD_SET_ADVERT_NAME: [0x08][utf8 name]. Firmware truncates beyond 31B; we
 // truncate client-side too so the wire format matches the official client.

@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { sign as cryptoSign, generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { type Advert, parseAdvert, parseAdvertAppData, parseContactBlob, verifyAdvert } from '../src/advert';
+import { type Advert, parseAdvert, parseAdvertAppData, parseContactBlob, verifyAdvert } from '../src/protocol/advert';
 
 // Build a real signed advert payload for a fresh ed25519 identity.
 function buildSignedAdvert(appData: Buffer, timestampUnix = 1_700_000_000) {

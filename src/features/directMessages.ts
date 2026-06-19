@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { CMD, PUSH, RESP, TXT_TYPE } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { CMD, PUSH, RESP, TXT_TYPE } from '../protocol/codes';
 import type { Contact, Message, MessageState } from '../types';
 import { encodeResetPath } from './contacts';
 import * as drain from './drain';

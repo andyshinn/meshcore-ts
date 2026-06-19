@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer';
-import { BufferWriter } from '../buffer';
-import { APP_PROTOCOL_VERSION, CMD, RESP } from '../codes';
 import type { Feature } from '../feature';
+import { BufferWriter } from '../protocol/buffer';
+import { APP_PROTOCOL_VERSION, CMD, RESP } from '../protocol/codes';
 import { pathHashModeToSize } from './pathHash';
 
 // RESP_DEVICE_INFO. Reply to CMD_DEVICE_QUERY. The firmware writes a fixed

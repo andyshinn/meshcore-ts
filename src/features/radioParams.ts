@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { CMD } from '../codes';
+import { CMD } from '../protocol/codes';
 
 // CMD_SET_RADIO_PARAMS. firmware ver ≥ 9 accepts a trailing client_repeat byte;
 // older firmware rejects the longer frame, so the caller must know the version.

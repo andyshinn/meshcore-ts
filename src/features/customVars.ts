@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { CMD, RESP } from '../codes';
 import type { Feature } from '../feature';
+import { CMD, RESP } from '../protocol/codes';
 
 // CMD_GET_CUSTOM_VAR: variable-length key. Empty key returns the full set.
 export function encodeGetCustomVar(key = ''): Buffer {

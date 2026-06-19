@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { CMD, RESP } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { CMD, RESP } from '../protocol/codes';
 import type { Owner } from '../types';
 
 // RESP_SELF_INFO frame layout (MyMesh.cpp:1038-1070):

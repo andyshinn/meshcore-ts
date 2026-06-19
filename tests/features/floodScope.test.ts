@@ -1,7 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { CMD } from '../../src/codes';
 import {
   decodeDefaultFloodScope,
   deriveFloodScopeKey,
@@ -10,6 +9,7 @@ import {
   encodeSetDefaultFloodScope,
   encodeSetFloodScopeKey,
 } from '../../src/features/floodScope';
+import { CMD } from '../../src/protocol/codes';
 import { makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');

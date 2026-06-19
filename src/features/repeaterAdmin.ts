@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../codes';
 import type { Feature, FeatureContext } from '../feature';
+import { PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
   type AvgMinMaxResult,
@@ -29,7 +29,7 @@ import {
   parseTelemetryResponse,
   parseTraceData,
   type TraceData,
-} from '../repeater';
+} from '../protocol/repeater';
 import type { AdminMode, AdminRole } from '../session/adminSessions';
 import * as directMessages from './directMessages';
 

@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { CMD } from '../../src/codes';
 import { LoopbackTransport, MeshCoreSession } from '../../src/index.js';
+import { CMD } from '../../src/protocol/codes';
 import { makeSession } from '../support/harness';
 
 // Yield microtasks until `predicate()` is true or we hit the cap. Keeps tests

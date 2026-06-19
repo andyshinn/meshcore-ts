@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { BufferReader, BufferWriter } from '../src/buffer';
+import { BufferReader, BufferWriter } from '../src/protocol/buffer';
 
 describe('BufferWriter', () => {
   it('writes little-endian integers and bytes in order', () => {
