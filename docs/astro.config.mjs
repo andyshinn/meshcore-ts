@@ -30,6 +30,12 @@ export default defineConfig({
           entryPoints: ['../src/index.ts'],
           tsconfig: '../tsconfig.json',
           typeDoc: {
+            // One page per namespace (the `export * as` namespaces). The default
+            // 'members' strategy explodes each member into its own file but emits
+            // no namespace index page, leaving the API home page's namespace links
+            // (…/namespaces/<ns>/readme/) broken. 'modules' generates the landing
+            // page each namespace link targets.
+            outputFileStrategy: 'modules',
             // Formatting: code blocks for signatures, tables for parameters.
             useCodeBlocks: true,
             parametersFormat: 'table',
