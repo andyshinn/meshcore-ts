@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as transports from '../../src/transports/index';
+import * as transports from '../../src/transports.js';
 
 describe('transports barrel', () => {
   it('re-exports the public transport surface', () => {

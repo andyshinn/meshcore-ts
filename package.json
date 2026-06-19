@@ -10,6 +10,7 @@
   "homepage": "https://andyshinn.as/meshcore-ts/",
   "bugs": "https://github.com/andyshinn/meshcore-ts/issues",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -18,6 +19,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js",
+      "require": "./dist/protocol.cjs"
     },
     "./transports": {
       "types": "./dist/transports.d.ts",

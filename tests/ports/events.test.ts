@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Contact, Message } from '../../src/index.js';
-import { MeshCoreEvents } from '../../src/index.js';
+import type { Contact } from '../../src/index.js';
+import type { Message } from '../../src/model/types.js';
+import { MeshCoreEvents } from '../../src/ports/events.js';
 
 const contact = (key: string): Contact => ({
   key,

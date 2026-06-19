@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Logger } from '../../src/index.js';
-import { noopLogger } from '../../src/index.js';
+import type { Logger } from '../../src/ports/logger.js';
+import { noopLogger } from '../../src/ports/logger.js';
 
 describe('noopLogger', () => {
   it('exposes all log-level methods', () => {

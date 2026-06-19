@@ -1,54 +1,26 @@
-// Public entry point for meshcore-ts.
+// Public entry point for @andyshinn/meshcore-ts (core surface).
 import { version } from '../package.json';
 
 export const VERSION: string = version;
 
-export * from './features/adminSessions';
-export * from './features/advert';
-export * from './features/autoAdd';
-export * from './features/battStorage';
-export * from './features/channelMessages';
-export * from './features/channels';
-export * from './features/contactInterop';
-export * from './features/contacts';
-export * from './features/contactsFull';
-export * from './features/customVars';
-export * from './features/deviceAdmin';
-export * from './features/deviceInfo';
-export * from './features/directMessages';
-export * from './features/drain';
-export * from './features/feature';
-export * from './features/floodScope';
-export * from './features/misc';
-export * from './features/pathDiagnostics';
-export * from './features/pathHash';
-export * from './features/pendingChannelSends';
-export * from './features/radioParams';
-export * from './features/rawData';
-export * from './features/registry';
-export * from './features/repeaterAdmin';
-export * from './features/runtime';
-export * from './features/selfInfo';
-export * from './features/signing';
-export * from './features/time';
-export * from './features/tuning';
-export * from './model/contacts';
-export * from './model/contactTypes';
-export * from './model/errors';
-export * from './model/meshObservations';
-export * from './model/paths';
-export * from './model/state/discoveredStore';
-export * from './model/state/model';
-export * from './model/types';
-export * from './ports/events';
-export * from './ports/logger';
-export * from './ports/transport';
-export * from './protocol/advert';
-export * from './protocol/buffer';
-export * from './protocol/codes';
-export * from './protocol/encode';
-export * from './protocol/frame';
-export * from './protocol/meshPacket';
-export * from './protocol/onAirPackets';
-export * from './protocol/repeater';
-export * from './session/session';
+export type { ContactRecord, ContactSource } from './model/contactTypes';
+// Errors consumers catch.
+export {
+  ContactTableFullError,
+  FeatureDisabledError,
+  ProtocolError,
+  ProtocolTimeoutError,
+  UnknownContactError,
+} from './model/errors';
+// Domain types consumers touch.
+export type { Contact, TransportState } from './model/types';
+// Event map for typing session.on(...) handlers.
+export type { MeshCoreEventMap } from './ports/events';
+// Structured-logging port (passed via MeshCoreSessionOptions.logger).
+export type { Logger } from './ports/logger';
+export type { Transport } from './ports/transport';
+// Transport contract + the dependency-free in-memory transport.
+export { LoopbackTransport } from './ports/transport';
+export type { MeshCoreSessionOptions } from './session/session';
+// Session orchestrator + its constructor options.
+export { MeshCoreSession } from './session/session';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { Contact } from '../src/index.js';
 import {
-  type Contact,
   DEFAULT_AUTO_ADD_CONFIG,
   DEFAULT_DEVICE_CAPABILITIES,
   DEFAULT_DEVICE_IDENTITY,
@@ -10,7 +10,7 @@ import {
   DEFAULT_SYNC_PROGRESS,
   DEFAULT_TELEMETRY_POLICY,
   hasValidFix,
-} from '../src/index.js';
+} from '../src/model/types.js';
 
 describe('DEFAULT_SYNC_PROGRESS', () => {
   it('has exactly the expected keys and values', () => {

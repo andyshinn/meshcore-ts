@@ -1,7 +1,11 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', transports: 'src/transports/index.ts' },
+  entry: {
+    index: 'src/index.ts',
+    protocol: 'src/protocol.ts',
+    transports: 'src/transports.ts',
+  },
   format: ['esm', 'cjs'],
   dts: true,
   target: 'es2022',

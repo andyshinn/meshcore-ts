@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Message } from '../../../src/index.js';
+import type { Message } from '../../../src/model/types.js';
 import { deliver, makeSession } from '../../support/harness';
 
 // RESP_CHANNEL_MSG_RECV_V3 (0x11): [0x11][snr*4 int8][2B rsv][idx][path_len]

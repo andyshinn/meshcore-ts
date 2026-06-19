@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Channel } from '../../../src/index.js';
+import type { Channel } from '../../../src/model/types.js';
 import { makeSession } from '../../support/harness.js';
 
 const channel: Channel = {
