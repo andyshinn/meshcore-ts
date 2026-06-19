@@ -12,8 +12,8 @@ stay **your** responsibility; they are intentionally not in this library.
 ## The interface
 
 ```ts
-import { Ports } from '@andyshinn/meshcore-ts';
-
+// The one contract you implement — exposed as `Ports.Transport`.
+// (`TransportState` is `Models.TransportState`.)
 interface Transport {
   send(bytes: Uint8Array): Promise<void>;        // write one companion frame
   onData(cb: (chunk: Uint8Array) => void): void; // one complete frame per call
@@ -45,23 +45,23 @@ console.log(transport.sent);         // inspect what the session wrote
 ## Implementing a real transport (sketch)
 
 ```ts
-import { Ports } from '@andyshinn/meshcore-ts';
+import { Models, Ports } from '@andyshinn/meshcore-ts';
 
 class BleTransport implements Ports.Transport {
   #dataCb?: (c: Uint8Array) => void;
-  #stateCb?: (s: TransportState) => void;
-  #state: TransportState = 'idle';
+  #stateCb?: (s: Models.TransportState) => void;
+  #state: Models.TransportState = 'idle';
 
   // your BLE library calls this once per GATT notification (= one frame):
   #onNotification = (buf: Uint8Array) => this.#dataCb?.(buf);
 
   async send(bytes: Uint8Array) { await this.#char.writeValue(bytes); }
   onData(cb: (c: Uint8Array) => void) { this.#dataCb = cb; }
-  onStateChange(cb: (s: TransportState) => void) { this.#stateCb = cb; }
+  onStateChange(cb: (s: Models.TransportState) => void) { this.#stateCb = cb; }
   getState() { return this.#state; }
 
   // call #setState('connected') from your connect flow:
-  #setState(s: TransportState) { this.#state = s; this.#stateCb?.(s); }
+  #setState(s: Models.TransportState) { this.#state = s; this.#stateCb?.(s); }
 }
 ```
 
