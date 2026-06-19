@@ -283,11 +283,19 @@ git commit -m "feat: add Ports namespace barrel + EventName constants"
 
 ```ts
 // tests/namespaces/features.test.ts
-import { describe, expectTypeOf, it } from 'vitest';
-import type * as Features from '../../src/features';
+// NOTE: a *value* import (not `import type`), so the module resolves at runtime —
+// that is what makes the red state below fire. The barrel is type-only, so the
+// runtime namespace object is empty; the per-type checks are enforced by `tsc`
+// (Step 5), since each `Features.X` reference errors if X is not exported.
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import * as Features from '../../src/features';
 
 describe('Features namespace barrel', () => {
-  it('exposes the bounded public feature types (compile-time)', () => {
+  it('loads as a (type-only → empty) namespace object', () => {
+    expect(Features).toBeTypeOf('object');
+  });
+
+  it('exposes the bounded public feature types (enforced by tsc)', () => {
     // Extension contracts.
     expectTypeOf<Features.Feature>().not.toBeNever();
     expectTypeOf<Features.FeatureContext>().not.toBeNever();
@@ -310,7 +318,7 @@ describe('Features namespace barrel', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pnpm vitest run tests/namespaces/features.test.ts`
-Expected: FAIL — cannot find module `../../src/features`.
+Expected: FAIL — cannot find module `../../src/features` (the value import does not resolve until Step 3 creates the barrel).
 
 - [ ] **Step 3: Create the barrel**
 
