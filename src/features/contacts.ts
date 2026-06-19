@@ -1,24 +1,12 @@
 import { Buffer } from 'node:buffer';
 import { advTypeToKind, hopsFromOutPathLen } from '../model/contacts';
+import type { ContactRecord, ContactSource } from '../model/contactTypes';
 import type { Contact } from '../model/types';
 import { ADV_TYPE, CMD, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
 import type { Feature, FeatureContext } from './feature';
 
 // ---- Wire types --------------------------------------------------------
-
-export interface ContactRecord {
-  publicKeyHex: string;
-  type: number;
-  flags: number;
-  outPathLen: number;
-  outPathHex: string;
-  name: string;
-  lastAdvertUnix: number;
-  gpsLat: number;
-  gpsLon: number;
-  lastmod: number;
-}
 
 // CMD_ADD_UPDATE_CONTACT serialises a complete contact record (see
 // encodeAddUpdateContact). The firmware *replaces* every field rather than
@@ -337,11 +325,6 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
 
   ctx.events.emit('contacts', ctx.state.getContacts());
 }
-
-/** Where an ingested contact was heard: `'sync'` (RESP_CONTACT during the
- *  GET_CONTACTS handshake — always on-radio) or `'advert'` (live PUSH_NEW_ADVERT
- *  — on-radio only if already in the store). */
-export type ContactSource = 'sync' | 'advert';
 
 /** Upsert a contact heard from RESP_CONTACT (sync, on-radio) or
  *  PUSH_NEW_ADVERT (live advert — on-radio only if already in the store).

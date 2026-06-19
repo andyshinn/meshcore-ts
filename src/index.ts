@@ -30,6 +30,7 @@ export * from './features/signing';
 export * from './features/time';
 export * from './features/tuning';
 export * from './model/contacts';
+export * from './model/contactTypes';
 export * from './model/errors';
 export * from './model/meshObservations';
 export * from './model/paths';

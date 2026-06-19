@@ -7,7 +7,6 @@ import * as channelMessages from '../features/channelMessages';
 import * as channels from '../features/channels';
 import * as contactInterop from '../features/contactInterop';
 import {
-  type ContactRecord,
   contactsFeature,
   emitDiscovered,
   encodeAddUpdateContact,
@@ -39,6 +38,7 @@ import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '.
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
+import type { ContactRecord } from '../model/contactTypes';
 import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../model/errors';
 import { SessionState } from '../model/state/model';
 import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../model/types';

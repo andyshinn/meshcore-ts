@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import type { ContactRecord, ContactSource } from '../features/contacts';
 import type { DiscoveredContact } from '../model/contacts';
+import type { ContactRecord, ContactSource } from '../model/contactTypes';
 import type {
   AutoAddConfig,
   Channel,
