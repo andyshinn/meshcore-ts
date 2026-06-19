@@ -66,10 +66,11 @@ explicit layers.
 src/
   protocol/    bottom layer — wire codec, no upward deps    (→ ./protocol)
     codes.ts  buffer.ts  frame.ts  encode.ts  advert.ts
-    meshPacket.ts  onAirPackets.ts  paths.ts  pubkey.ts  repeater.ts
+    meshPacket.ts  onAirPackets.ts  pubkey.ts  repeater.ts
   model/       domain types + in-memory state + errors
     types.ts  errors.ts  contacts.ts (was contacts/discovered.ts)
     contactTypes.ts (NEW: ContactRecord/ContactSource, moved out of features)
+    paths.ts (operates on Channel/MessagePath domain types)
     meshObservations.ts
     state/{ model.ts, discoveredStore.ts }
   ports/       pure interfaces + in-memory adapters
@@ -95,8 +96,8 @@ lint.
 
 | From | To |
 |---|---|
-| `buffer.ts`, `frame.ts`, `encode.ts`, `advert.ts`, `meshPacket.ts`, `onAirPackets.ts`, `paths.ts`, `pubkey.ts`, `repeater.ts`, `codes.ts` | `protocol/` |
-| `types.ts`, `errors.ts`, `meshObservations.ts` | `model/` |
+| `buffer.ts`, `frame.ts`, `encode.ts`, `advert.ts`, `meshPacket.ts`, `onAirPackets.ts`, `pubkey.ts`, `repeater.ts`, `codes.ts` | `protocol/` |
+| `types.ts`, `errors.ts`, `paths.ts`, `meshObservations.ts` | `model/` |
 | `contacts/discovered.ts` | `model/contacts.ts` |
 | `state/model.ts`, `state/discoveredStore.ts` | `model/state/` |
 | `feature.ts`, `registry.ts` | `features/` |
@@ -112,10 +113,11 @@ stays at `src/` root through phase 1 and moves directly to `features/` in phase 
 
 ## Coupling smells and their resolution (relocation, not inversion)
 
-Four rightward (rule-violating) edges exist today. Three are the same mistake:
-session-*lifetime* state was filed under `session/` even though it is
-conceptually *feature* state. Relocating fixes the edges with no
-interface-extraction / dependency-inversion gymnastics.
+Five rightward (rule-violating) edges exist today. Three (smells 2–4) are the
+same mistake: session-*lifetime* state was filed under `session/` even though it
+is conceptually *feature* state. The other two are simple misclassifications
+(smells 1 and 5). Relocating fixes all of them with no interface-extraction /
+dependency-inversion gymnastics.
 
 1. **`ports/events.ts` → `features/contacts` (`ContactRecord`, `ContactSource`).**
    These are consumer-facing domain types buried in a feature module. **Move to
@@ -140,6 +142,15 @@ interface-extraction / dependency-inversion gymnastics.
    `features/pendingChannelSends.ts`** (`features → ports` is downward, legal).
    `MeshObservations` stays in `model/` — it is a pure data structure with no
    event dependency.
+
+5. **`paths.ts` → `types` (would-be `protocol → model`).** `paths.ts` imports
+   the domain types `Channel`, `MessageHop`, `MessagePath` and builds
+   `MessagePath` structures from wire path-hex — it is domain-level mapping, not
+   raw byte codec. **Classify it as `model/paths.ts`, not `protocol/`.** Then
+   `paths → types` is same-layer, and its importers (`features/channelMessages`,
+   `features/pendingChannelSends`) reach it downward. Consequence: `paths` is
+   **not** part of the `./protocol` public barrel (it stays model-internal;
+   expose later only if a consumer needs it — YAGNI).
 
 **Net effect:** `session/` collapses to essentially just `session.ts` (the
 orchestrator). Every rightward edge disappears and the dependency rule holds
@@ -181,8 +192,9 @@ exports above. The `transports/` source files themselves do not move.
 ### `./protocol` — `src/protocol.ts`
 
 The whole `protocol/` layer for power users: `codes` (CMD/RESP), `encode*`/
-`decode*` functions, `frame`, `advert`, `meshPacket`, `onAirPackets`, `paths`,
-`pubkey`, `repeater`, `BufferReader`/`BufferWriter`. Forward-looking;
+`decode*` functions, `frame`, `advert`, `meshPacket`, `onAirPackets`,
+`pubkey`, `repeater`, `BufferReader`/`BufferWriter`. (`paths` is **not** here —
+it is model-internal; see smell 5.) Forward-looking;
 `coresense` does not use it yet (it decodes via the external
 `@michaelhart/meshcore-decoder`), so adding it has zero migration cost.
 
@@ -235,11 +247,12 @@ preserved with `git mv`; each ends with typecheck + tests passing):
    `protocol/ model/ ports/ features/ session/`; rewrite all internal + test
    import specifiers in lockstep. Pure motion, no logic change.
    Gate: `pnpm typecheck && pnpm test`.
-2. **Resolve the four smells.** Move `ContactRecord`/`ContactSource` →
+2. **Resolve smells 1–4.** Move `ContactRecord`/`ContactSource` →
    `model/contactTypes.ts`; move `SessionRuntime` + `createSessionRuntime`,
    `AdminSessionStore`, `PendingChannelSends` → `features/`. Update references.
-   Gate: typecheck + tests, plus `madge --circular src` to confirm no new
-   cycles.
+   (Smell 5 needs no separate work — `paths.ts` is simply placed in `model/`
+   during phase 1.) Gate: typecheck + tests, plus `madge --circular src` to
+   confirm no new cycles.
 3. **Curate the public surface.** Author `src/index.ts`, `src/protocol.ts`,
    `src/transports.ts`; remove the flat `export *`; update `package.json`
    `exports` (+`./protocol`, `"sideEffects": false`) and tsup `entry`.
