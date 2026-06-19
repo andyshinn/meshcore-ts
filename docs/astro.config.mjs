@@ -16,7 +16,7 @@ export default defineConfig({
     starlight({
       title: 'meshcore-ts',
       description:
-        'Application-agnostic MeshCore companion-protocol library for Node.js, in TypeScript.',
+        'MeshCore companion-protocol library for Node.js in TypeScript.',
       social: [
         {
           icon: 'github',
