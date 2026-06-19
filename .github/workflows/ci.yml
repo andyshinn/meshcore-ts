@@ -50,5 +50,33 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Set version from release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: pnpm version "$TAG" --no-git-tag-version --allow-same-version
       - name: Publish to npm
         run: pnpm publish --no-git-checks --provenance
+
+  bump-dev-version:
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the next dev-version bump back to main
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Bump main to next dev version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm version prepatch --preid dev --no-git-checks
+          git push --follow-tags origin main
