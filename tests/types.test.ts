@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Contact } from '../src/index.js';
+import type { Models } from '../src/index.js';
 import {
   DEFAULT_AUTO_ADD_CONFIG,
   DEFAULT_DEVICE_CAPABILITIES,
@@ -132,7 +132,7 @@ describe('DEFAULT_DEVICE_CAPABILITIES', () => {
 });
 
 describe('hasValidFix', () => {
-  const base: Contact = {
+  const base: Models.Contact = {
     key: 'c:abcdef',
     publicKeyHex: 'abcdef',
     name: 'node',

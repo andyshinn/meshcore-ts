@@ -1,7 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { SerialPort } from 'serialport';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 import { requireArg } from './lib/helpers';
 
 const usage = 'usage: pnpm example examples/sign-data.ts <serial-port> [text]';
@@ -9,7 +8,7 @@ const path = requireArg(process.argv, 2, usage);
 const text = process.argv[3] ?? 'meshcore-ts';
 
 const port = new SerialPort({ path, baudRate: 115200 });
-const session = new MeshCoreSession({ transport: new SerialTransport(port) });
+const session = new MeshCoreSession({ transport: new Transports.Serial(port) });
 
 session.events.on('transportState', async (state) => {
   if (state !== 'connected') return;

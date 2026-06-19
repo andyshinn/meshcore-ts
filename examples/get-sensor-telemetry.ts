@@ -1,6 +1,5 @@
 import { SerialPort } from 'serialport';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 import { requireArg, waitForEvent } from './lib/helpers';
 
 const usage =
@@ -9,7 +8,7 @@ const path = requireArg(process.argv, 2, usage);
 const prefix = requireArg(process.argv, 3, usage);
 
 const port = new SerialPort({ path, baudRate: 115200 });
-const session = new MeshCoreSession({ transport: new SerialTransport(port) });
+const session = new MeshCoreSession({ transport: new Transports.Serial(port) });
 
 session.events.on('transportState', async (state) => {
   if (state !== 'connected') return;

@@ -1,13 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Contact } from '../../../src/index.js';
+import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
 const PK = 'aa'.repeat(32);
 const PREFIX = 'aaaaaaaaaaaa'; // first 6 bytes of PK
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-const repeater = (): Contact => ({
+const repeater = (): Models.Contact => ({
   key: `c:${PK}`,
   publicKeyHex: PK,
   name: 'Repeater-1',

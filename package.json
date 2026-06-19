@@ -19,16 +19,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    },
-    "./protocol": {
-      "types": "./dist/protocol.d.ts",
-      "import": "./dist/protocol.js",
-      "require": "./dist/protocol.cjs"
-    },
-    "./transports": {
-      "types": "./dist/transports.d.ts",
-      "import": "./dist/transports.js",
-      "require": "./dist/transports.cjs"
     }
   },
   "main": "./dist/index.cjs",

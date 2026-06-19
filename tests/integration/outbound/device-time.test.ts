@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProtocolError, ProtocolTimeoutError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 describe('device time round-trips', () => {
@@ -31,7 +31,7 @@ describe('device time round-trips', () => {
     await expect(p).resolves.toBeUndefined();
   });
 
-  it('setDeviceTime rejects with ProtocolError on RESP_ERR[ILLEGAL_ARG]', async () => {
+  it('setDeviceTime rejects with Errors.ProtocolError on RESP_ERR[ILLEGAL_ARG]', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
 
@@ -39,8 +39,8 @@ describe('device time round-trips', () => {
     await Promise.resolve();
     deliver(transport, Buffer.from([0x01, 0x06])); // RESP_ERR + ERR_CODE_ILLEGAL_ARG
     const err = await p.catch((e) => e);
-    expect(err).toBeInstanceOf(ProtocolError);
-    expect((err as ProtocolError).errorCode).toBe(0x06);
+    expect(err).toBeInstanceOf(Errors.ProtocolError);
+    expect((err as Errors.ProtocolError).errorCode).toBe(0x06);
   });
 
   it('getDeviceTime rejects when the transport disconnects mid-request', async () => {
@@ -57,13 +57,13 @@ describe('device time round-trips', () => {
     await expect(p).rejects.toThrow(/disconnected/i);
   });
 
-  it('getDeviceTime rejects with ProtocolTimeoutError after the timeout elapses', async () => {
+  it('getDeviceTime rejects with Errors.ProtocolTimeoutError after the timeout elapses', async () => {
     vi.useFakeTimers();
     const { session } = makeSession();
     stop = () => session.stop();
 
     const p = session.getDeviceTime();
-    const expectation = expect(p).rejects.toBeInstanceOf(ProtocolTimeoutError);
+    const expectation = expect(p).rejects.toBeInstanceOf(Errors.ProtocolTimeoutError);
     await vi.advanceTimersByTimeAsync(5_000);
     await expectation;
   });

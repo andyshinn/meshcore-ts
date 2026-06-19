@@ -1,12 +1,11 @@
 import { SerialPort } from 'serialport';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 import { requireArg, waitForEvent } from './lib/helpers';
 
 const path = requireArg(process.argv, 2, 'usage: pnpm example examples/get-device-info.ts <serial-port>');
 
 const port = new SerialPort({ path, baudRate: 115200 });
-const session = new MeshCoreSession({ transport: new SerialTransport(port) });
+const session = new MeshCoreSession({ transport: new Transports.Serial(port) });
 
 const mhz = (hz: number): string => `${(hz / 1_000_000).toFixed(3)} MHz`;
 const khz = (hz: number): string => `${(hz / 1000).toFixed(1)} kHz`;

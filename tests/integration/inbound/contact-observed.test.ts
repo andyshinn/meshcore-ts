@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ContactRecord, ContactSource } from '../../../src/index.js';
+import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
 // RESP_CONTACT (0x03) and PUSH_NEW_ADVERT (0x8a) share the 148-byte record
@@ -34,8 +34,8 @@ describe('inbound contactObserved bus event', () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
 
-    const observed: Array<{ record: ContactRecord; source: ContactSource }> = [];
-    session.events.on('contactObserved', (record: ContactRecord, source: ContactSource) =>
+    const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
+    session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
       observed.push({ record, source }),
     );
 

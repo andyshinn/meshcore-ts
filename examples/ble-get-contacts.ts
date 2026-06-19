@@ -1,13 +1,12 @@
 import { Buffer } from 'node:buffer';
 import noble, { type Characteristic, type Peripheral } from '@stoprocent/noble';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { createBleTransport, NORDIC_UART } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 
 // noble compares 128-bit UUIDs without dashes, lowercased.
 const toNoble = (uuid: string): string => uuid.replace(/-/g, '').toLowerCase();
-const SERVICE = toNoble(NORDIC_UART.service);
-const RX = toNoble(NORDIC_UART.rxWrite); // host → device
-const TX = toNoble(NORDIC_UART.txNotify); // device → host
+const SERVICE = toNoble(Transports.NORDIC_UART.service);
+const RX = toNoble(Transports.NORDIC_UART.rxWrite); // host → device
+const TX = toNoble(Transports.NORDIC_UART.txNotify); // device → host
 
 async function main(): Promise<void> {
   await noble.waitForPoweredOn();
@@ -35,7 +34,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const transport = createBleTransport({
+  const transport = Transports.createBle({
     write: (bytes) => rxChar.writeAsync(Buffer.from(bytes), true),
     subscribe: (onBytes) => {
       txChar.on('data', (data: Buffer) => onBytes(new Uint8Array(data)));

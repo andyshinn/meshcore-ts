@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Contact } from '../../src/index.js';
+import type { Models } from '../../src/index.js';
 import type { Message } from '../../src/model/types.js';
 import { MeshCoreEvents } from '../../src/ports/events.js';
 
-const contact = (key: string): Contact => ({
+const contact = (key: string): Models.Contact => ({
   key,
   publicKeyHex: key,
   name: key,
@@ -13,7 +13,7 @@ const contact = (key: string): Contact => ({
 describe('MeshCoreEvents', () => {
   it('delivers typed args from emit to an on listener', () => {
     const events = new MeshCoreEvents();
-    const received: Contact[][] = [];
+    const received: Models.Contact[][] = [];
     events.on('contacts', (contacts) => received.push(contacts));
 
     const payload = [contact('a'), contact('b')];

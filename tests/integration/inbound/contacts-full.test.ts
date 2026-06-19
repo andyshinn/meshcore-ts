@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Logger } from '../../../src/index.js';
+import type { Ports } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
 // PORT NOTE: the donor app surfaced PUSH_CONTACTS_FULL as a user-facing toast
@@ -15,7 +15,7 @@ describe('PUSH_CONTACTS_FULL handled via the feature registry', () => {
 
   it('logs a warning and emits contactsFull when the radio reports its store full', async () => {
     const warnings: string[] = [];
-    const logger: Logger = {
+    const logger: Ports.Logger = {
       trace() {},
       debug() {},
       info() {},

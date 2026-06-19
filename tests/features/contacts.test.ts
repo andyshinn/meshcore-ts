@@ -12,7 +12,7 @@ import {
   encodeRemoveContact,
   encodeResetPath,
 } from '../../src/features/contacts';
-import type { Contact } from '../../src/index';
+import type { Models } from '../../src/index';
 import { deliver, makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');
@@ -227,7 +227,7 @@ describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
     const { session, transport } = makeSession();
     try {
       // Seed a known contact so the PUSH_ADVERT handler finds it.
-      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
       session.state.upsertContact(contact);
 
       // Deliver PUSH_ADVERT [0x80][pubkey].
@@ -257,7 +257,7 @@ describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
     try {
-      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
       session.state.upsertContact(contact);
 
       const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
@@ -282,7 +282,7 @@ describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
     try {
-      const contact: Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
       session.state.upsertContact(contact);
 
       const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);

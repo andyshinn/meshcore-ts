@@ -1,6 +1,6 @@
-import { decodeOnAirPacket } from '@andyshinn/meshcore-ts/protocol';
+import { Protocol } from '@andyshinn/meshcore-ts';
 
-// decodeOnAirPacket() structurally decodes a MeshCore on-air mesh packet — the
+// Protocol.decodeOnAirPacket() structurally decodes a MeshCore on-air mesh packet — the
 // bytes carried inside PUSH_RAW_DATA (0x84) / PUSH_LOG_RX_DATA (0x88) frames —
 // into a tagged union keyed on `payload.kind`. It performs no decryption (cipher
 // bodies are reported only as a length) and never throws: unparseable or
@@ -10,7 +10,7 @@ import { decodeOnAirPacket } from '@andyshinn/meshcore-ts/protocol';
 // In a live session you'd feed it the hex from the rawPacket event:
 //
 //   session.events.on('rawPacket', (pkt) => {
-//     console.dir(decodeOnAirPacket(pkt.hex), { depth: null });
+//     console.dir(Protocol.decodeOnAirPacket(pkt.hex), { depth: null });
 //   });
 //
 // Here we decode a few captured packets so it runs with no hardware.
@@ -35,7 +35,7 @@ const samples: Array<{ label: string; hex: string }> = [
 ];
 
 for (const { label, hex } of samples) {
-  const pkt = decodeOnAirPacket(hex);
+  const pkt = Protocol.decodeOnAirPacket(hex);
   console.log(`\n# ${label}  (payloadType=${pkt.payloadTypeName})`);
   console.dir(pkt.payload, { depth: null });
 }

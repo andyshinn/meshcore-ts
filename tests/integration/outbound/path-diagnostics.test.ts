@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type Contact, ProtocolError } from '../../../src/index.js';
+import { Errors, type Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const PK = 'aa'.repeat(32);
@@ -17,7 +17,7 @@ const seedContact = (session: ReturnType<typeof makeSession>['session']): void =
     publicKeyHex: PK,
     name: 'Repeater',
     kind: 'repeater',
-  } satisfies Contact);
+  } satisfies Models.Contact);
 };
 
 // RESP_SENT [0x06][flood][tag u32][est_timeout u32] (10B).
@@ -66,14 +66,14 @@ describe('outbound path diagnostics', () => {
     });
   });
 
-  it('sendPathDiscoveryReq rejects ProtocolError when the radio refuses dispatch', async () => {
+  it('sendPathDiscoveryReq rejects Errors.ProtocolError when the radio refuses dispatch', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     seedContact(session);
     const p = session.sendPathDiscoveryReq(`c:${PK}`);
     await flush();
     deliver(transport, Buffer.from([0x01, 0x02])); // RESP_ERR NOT_FOUND
-    await expect(p).rejects.toBeInstanceOf(ProtocolError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ProtocolError);
   });
 
   it('a superseding discovery for the same contact survives the older one failing', async () => {

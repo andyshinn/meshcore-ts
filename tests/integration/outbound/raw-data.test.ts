@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProtocolError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const RESP_OK = Buffer.from([0x00]);
@@ -26,13 +26,13 @@ describe('outbound raw / control / channel data', () => {
     await expect(p).resolves.toBeUndefined();
   });
 
-  it('sendControlData writes [0x37][data] and rejects ProtocolError on RESP_ERR', async () => {
+  it('sendControlData writes [0x37][data] and rejects Errors.ProtocolError on RESP_ERR', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     const p = session.sendControlData(Buffer.from([0x81, 0x22]));
     expect(lastSentHex(transport)).toBe('378122');
     deliver(transport, RESP_ERR);
-    await expect(p).rejects.toBeInstanceOf(ProtocolError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ProtocolError);
   });
 
   it('sendChannelData writes the flood frame and resolves on RESP_OK', async () => {

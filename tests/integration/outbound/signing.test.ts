@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProtocolError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const SIG = 'cd'.repeat(64);
@@ -109,7 +109,7 @@ describe('outbound message signing', () => {
     expect(transport.sent.length).toBe(sentCount); // no CMD_SIGN_DATA written
   });
 
-  it('rejects ProtocolError when a chunk is refused (RESP_ERR BAD_STATE)', async () => {
+  it('rejects Errors.ProtocolError when a chunk is refused (RESP_ERR BAD_STATE)', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     const p = session.signData(Buffer.from([0xaa]));
@@ -120,6 +120,6 @@ describe('outbound message signing', () => {
     expect(lastSent(transport)?.[0]).toBe(0x22);
     deliver(transport, Buffer.from([0x01, 0x04])); // RESP_ERR + BAD_STATE
 
-    await expect(p).rejects.toBeInstanceOf(ProtocolError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ProtocolError);
   });
 });

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { parseAdvert, parseMeshPacket } from '@andyshinn/meshcore-ts/protocol';
+import { Protocol } from '@andyshinn/meshcore-ts';
 
 // A meshcore:// advert URL (from meshcore.js examples/parse_advert.js).
 const advertUrl =
@@ -7,13 +7,13 @@ const advertUrl =
 const advertHex = advertUrl.replace('meshcore://', '');
 const bytes = Buffer.from(advertHex, 'hex');
 
-const packet = parseMeshPacket(bytes);
+const packet = Protocol.parseMeshPacket(bytes);
 if (!packet) {
   console.error('Failed to parse mesh packet from advert URL');
   process.exit(1);
 }
 
-const advert = parseAdvert(packet.payload);
+const advert = Protocol.parseAdvert(packet.payload);
 if (!advert) {
   console.error('Failed to parse advert from packet payload');
   process.exit(1);

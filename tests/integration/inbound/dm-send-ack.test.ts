@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Contact } from '../../../src/index.js';
+import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
 const PK = 'aa'.repeat(32);
@@ -38,7 +38,7 @@ function contactMsgV3(prefixHex: string, body: string): Buffer {
 }
 const RESP_ERR = Buffer.from([0x01, 0x02]); // RESP_ERR + NOT_FOUND
 
-const contact = (pk: string, name: string): Contact => ({
+const contact = (pk: string, name: string): Models.Contact => ({
   key: `c:${pk}`,
   publicKeyHex: pk,
   name,

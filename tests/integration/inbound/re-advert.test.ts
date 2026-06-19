@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Contact } from '../../../src/index.js';
+import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
 const PK = 'aa'.repeat(32);
@@ -10,7 +10,7 @@ function advert(pubkeyHex: string): Buffer {
   return Buffer.concat([Buffer.from([0x80]), Buffer.from(pubkeyHex, 'hex')]);
 }
 
-const contact = (pk: string, lastSeenMs: number): Contact => ({
+const contact = (pk: string, lastSeenMs: number): Models.Contact => ({
   key: `c:${pk}`,
   publicKeyHex: pk,
   name: 'Bob',

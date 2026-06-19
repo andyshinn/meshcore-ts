@@ -1,6 +1,5 @@
 import { SerialPort } from 'serialport';
-import { MeshCoreSession } from '@andyshinn/meshcore-ts';
-import { SerialTransport } from '@andyshinn/meshcore-ts/transports';
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
 import { requireArg } from './lib/helpers';
 
 const path = requireArg(
@@ -10,7 +9,7 @@ const path = requireArg(
 );
 
 const port = new SerialPort({ path, baudRate: 115200 });
-const session = new MeshCoreSession({ transport: new SerialTransport(port) });
+const session = new MeshCoreSession({ transport: new Transports.Serial(port) });
 
 const handled = new Set<string>();
 

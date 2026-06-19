@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FeatureDisabledError, ProtocolError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const KEY = 'ab'.repeat(64); // 64-byte ed25519 expanded private key
@@ -28,12 +28,12 @@ describe('outbound device admin', () => {
     expect(await p).toBe(KEY);
   });
 
-  it('exportPrivateKey rejects FeatureDisabledError on RESP_DISABLED', async () => {
+  it('exportPrivateKey rejects Errors.FeatureDisabledError on RESP_DISABLED', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     const p = session.exportPrivateKey();
     deliver(transport, RESP_DISABLED);
-    await expect(p).rejects.toBeInstanceOf(FeatureDisabledError);
+    await expect(p).rejects.toBeInstanceOf(Errors.FeatureDisabledError);
   });
 
   it('importPrivateKey writes the 65-byte frame and resolves on RESP_OK', async () => {
@@ -48,12 +48,12 @@ describe('outbound device admin', () => {
     await expect(p).resolves.toBeUndefined();
   });
 
-  it('importPrivateKey rejects ProtocolError on RESP_ERR', async () => {
+  it('importPrivateKey rejects Errors.ProtocolError on RESP_ERR', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     const p = session.importPrivateKey(KEY);
     deliver(transport, Buffer.from([0x01, 0x06])); // ERR + ILLEGAL_ARG
-    await expect(p).rejects.toBeInstanceOf(ProtocolError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ProtocolError);
   });
 
   it('setDevicePin writes [0x25][pin u32 LE] and resolves on RESP_OK', async () => {

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ProtocolError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const PK = 'aa'.repeat(32);
@@ -55,14 +55,14 @@ describe('outbound contact interop', () => {
     expect(await p).toBeNull();
   });
 
-  it('importContact writes [0x12][blob] and rejects ProtocolError on RESP_ERR', async () => {
+  it('importContact writes [0x12][blob] and rejects Errors.ProtocolError on RESP_ERR', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     const blob = 'cc'.repeat(98);
     const p = session.importContact(blob);
     expect(sentHex(transport)).toBe(`12${blob}`);
     deliver(transport, RESP_ERR_NOT_FOUND);
-    await expect(p).rejects.toBeInstanceOf(ProtocolError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ProtocolError);
   });
 
   it('getContactByKey resolves the record from RESP_CONTACT without touching the sync', async () => {

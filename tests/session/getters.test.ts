@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { LoopbackTransport, MeshCoreSession } from '../../src/index.js';
+import { MeshCoreSession, Transports } from '../../src/index.js';
 import { CMD } from '../../src/protocol/codes';
 import { makeSession } from '../support/harness';
 
@@ -131,7 +131,7 @@ describe('session: getChannel / getChannels (active re-fetch)', () => {
       [3, buildChannelInfoFrame(3, '#region', 'dd'.repeat(16))],
     ]);
 
-    class Responder extends LoopbackTransport {
+    class Responder extends Transports.Loopback {
       override async send(bytes: Uint8Array): Promise<void> {
         await super.send(bytes);
         const buf = Buffer.from(bytes);

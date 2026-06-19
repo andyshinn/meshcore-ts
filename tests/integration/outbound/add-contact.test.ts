@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ContactTableFullError } from '../../../src/index.js';
+import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 const PUBKEY = 'aa'.repeat(32);
@@ -40,7 +40,7 @@ describe('addContactToRadio reply handling', () => {
     expect(session.state.discovered.get(PUBKEY)?.on_radio).toBe(1);
   });
 
-  it('rejects with ContactTableFullError on RESP_ERR[0x03], leaving on_radio unset', async () => {
+  it('rejects with Errors.ContactTableFullError on RESP_ERR[0x03], leaving on_radio unset', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
     seedDiscovered(session);
@@ -48,7 +48,7 @@ describe('addContactToRadio reply handling', () => {
     const p = session.addContactToRadio(PUBKEY);
     await Promise.resolve();
     deliver(transport, Buffer.from([0x01, 0x03])); // RESP_ERR + ERR_CODE_TABLE_FULL
-    await expect(p).rejects.toBeInstanceOf(ContactTableFullError);
+    await expect(p).rejects.toBeInstanceOf(Errors.ContactTableFullError);
 
     expect(session.state.discovered.get(PUBKEY)?.on_radio).toBe(0);
   });
@@ -62,7 +62,7 @@ describe('addContactToRadio reply handling', () => {
     await Promise.resolve();
     deliver(transport, Buffer.from([0x01])); // bare RESP_ERR
     await expect(p).rejects.toThrow(/did not confirm/i);
-    await expect(p).rejects.not.toBeInstanceOf(ContactTableFullError);
+    await expect(p).rejects.not.toBeInstanceOf(Errors.ContactTableFullError);
 
     expect(session.state.discovered.get(PUBKEY)?.on_radio).toBe(0);
   });

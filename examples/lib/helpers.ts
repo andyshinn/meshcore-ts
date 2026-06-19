@@ -1,4 +1,4 @@
-import type { MeshCoreEventMap, MeshCoreSession } from '@andyshinn/meshcore-ts';
+import type { MeshCoreSession, Ports } from '@andyshinn/meshcore-ts';
 
 /** Read a required positional CLI arg; print `usage` and exit(1) if absent. */
 export function requireArg(argv: string[], index: number, usage: string): string {
@@ -15,21 +15,21 @@ export function requireArg(argv: string[], index: number, usage: string): string
  * gated by `predicate`); reject on timeout. Always removes its listener.
  * Used for the event-driven repeater request/response flows.
  */
-export function waitForEvent<K extends keyof MeshCoreEventMap>(
+export function waitForEvent<K extends keyof Ports.EventMap>(
   session: MeshCoreSession,
   event: K,
   opts: {
-    predicate?: (...args: Parameters<MeshCoreEventMap[K]>) => boolean;
+    predicate?: (...args: Parameters<Ports.EventMap[K]>) => boolean;
     timeoutMs?: number;
   } = {},
-): Promise<Parameters<MeshCoreEventMap[K]>> {
+): Promise<Parameters<Ports.EventMap[K]>> {
   const { predicate, timeoutMs = 15_000 } = opts;
   return new Promise((resolve, reject) => {
-    const listener = ((...args: Parameters<MeshCoreEventMap[K]>) => {
+    const listener = ((...args: Parameters<Ports.EventMap[K]>) => {
       if (predicate && !predicate(...args)) return;
       cleanup();
       resolve(args);
-    }) as MeshCoreEventMap[K];
+    }) as Ports.EventMap[K];
 
     const cleanup = (): void => {
       clearTimeout(timer);
