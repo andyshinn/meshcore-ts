@@ -100,6 +100,32 @@ session.start(); // Transports.Serial observes open/close/error; it does not ope
 `Transports.Serial` frames the MeshCore serial protocol for you. You own opening
 and closing the port.
 
+## TCP (node:net)
+
+TCP devices speak the **same** companion wire framing as serial, and the only
+driver is the `node:net` builtin — so `Transports.Tcp` is **complete and
+batteries-included**: it owns its socket and its connect/close lifecycle (no
+bring-your-own driver, no third-party deps).
+
+```ts
+import { MeshCoreSession, Transports } from '@andyshinn/meshcore-ts';
+
+const transport = new Transports.Tcp({ host: '192.168.1.50', port: 5000 });
+await transport.connect(); // dials; resolves on connect, rejects on error/timeout
+
+const session = new MeshCoreSession({ transport });
+session.start();
+
+// later:
+await transport.close(); // destroys the socket; state returns to idle
+```
+
+Options: `{ host, port, connectTimeoutMs? = 10000, maxFrameBytes? = 256, createSocket? }`.
+`createSocket(host, port)` is a test seam (defaults to `net.createConnection`).
+`Transports.createTcp(opts)` is the factory form. State transitions are
+`idle → connecting → connected → idle` (on `close()`) or `error` (on connect
+failure/timeout).
+
 ## BLE (noble)
 
 ```ts

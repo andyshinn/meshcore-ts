@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelHashOf } from '../../src/model/paths';
-import type { Channel, Message } from '../../src/model/types';
+import type { Channel } from '../../src/model/types';
 import { LoopbackTransport } from '../../src/ports/transport';
 import { MeshCoreSession } from '../../src/session/session';
 
@@ -135,32 +135,24 @@ describe('MeshCoreSession command surface', () => {
 
   describe('registerChannelSend + 0x88 relay attribution', () => {
     it('emits messagePathHeard when a heard relay matches a registered send', () => {
-      // Seed a sent channel message the relay can be attributed back to.
+      // Registration alone is sufficient — the lib does not need to own the
+      // message to surface the heard relay (the downstream app may own it).
       const messageId = 'chmsg-test-1';
-      const message: Message = {
-        id: messageId,
-        key: channel.key,
-        ts: Date.now(),
-        body: 'hello channel',
-        state: 'sent',
-      };
-      session.state.insertMessage(message);
 
       const channelHash = channelHashOf(channel);
       expect(channelHash).not.toBeNull();
       session.registerChannelSend({ messageId, channelHash: channelHash as number });
 
-      const heard: Array<{ id: string; state: string }> = [];
-      session.events.on('messagePathHeard', (p) => heard.push({ id: p.id, state: p.state }));
+      const heard: Array<{ messageId: string; path: { id: string } }> = [];
+      session.events.on('messagePathHeard', (p) => heard.push({ messageId: p.messageId, path: p.path }));
 
       // A repeater relays our send — the radio surfaces it as a 0x88 log_rx frame
       // whose GRP_TXT payload carries the same channel-hash byte.
       transport.receive(logRxGrpTxtFrame(channelHash as number));
 
       expect(heard).toHaveLength(1);
-      expect(heard[0].id).toBe(messageId);
-      // A 'sent' message advances to 'heard' on the first relay observation.
-      expect(heard[0].state).toBe('heard');
+      expect(heard[0].messageId).toBe(messageId);
+      expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
     });
   });
 });

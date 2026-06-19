@@ -73,30 +73,57 @@ describe('PendingChannelSends.register / matchObservation', () => {
 });
 
 describe('PendingChannelSends.attributeObservation', () => {
-  it('appends a path to the message and emits messagePathHeard', () => {
+  it('emits messagePathHeard with the messageId and observed path on a match', () => {
     const sends = new PendingChannelSends();
     const state = new SessionState();
     const events = new MeshCoreEvents();
     state.setOwner({ name: 'Me', publicKeyHex: 'aa'.repeat(32), publicKeyShort: 'aaaa' });
-    state.insertMessage(sentMessage('m1'));
     sends.register({ messageId: 'm1', channelHash: 0x42, sentAt: 900 });
 
-    const heard: Array<{ id: string; path: MessagePath; state: string }> = [];
+    const heard: Array<{ messageId: string; path: MessagePath }> = [];
     events.on('messagePathHeard', (p) => heard.push(p));
 
     const attributed = sends.attributeObservation(obs({ channelHash: 0x42 }), state, events);
     expect(attributed).toBe(true);
 
-    // The message gained a path and advanced sent → heard.
-    const msg = state.getMessagesForKey('ch:test')[0];
-    expect(msg.state).toBe('heard');
-    expect(msg.meta?.paths).toHaveLength(1);
-
-    // The event fired with the message id, path, and new state.
+    // The event carries only the message id and the heard path — no lib state.
     expect(heard).toHaveLength(1);
-    expect(heard[0].id).toBe('m1');
-    expect(heard[0].state).toBe('heard');
+    expect(Object.keys(heard[0]).sort()).toEqual(['messageId', 'path']);
+    expect(heard[0].messageId).toBe('m1');
     expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('emits even when the matched message is unknown to the message store', () => {
+    // The coresense case: a downstream app owns the message; the lib does not.
+    // The relay must still surface as messagePathHeard.
+    const sends = new PendingChannelSends();
+    const state = new SessionState();
+    const events = new MeshCoreEvents();
+    sends.register({ messageId: 'ghost', channelHash: 0x42, sentAt: 900 });
+
+    const heard: Array<{ messageId: string; path: MessagePath }> = [];
+    events.on('messagePathHeard', (p) => heard.push(p));
+
+    expect(sends.attributeObservation(obs({ channelHash: 0x42 }), state, events)).toBe(true);
+    expect(heard).toHaveLength(1);
+    expect(heard[0].messageId).toBe('ghost');
+    expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('does not mutate the lib message store on a match', () => {
+    // Decoupled from the store: even a message the lib happens to hold is left
+    // untouched (no path appended, no sent → heard advance).
+    const sends = new PendingChannelSends();
+    const state = new SessionState();
+    const events = new MeshCoreEvents();
+    state.insertMessage(sentMessage('m1'));
+    sends.register({ messageId: 'm1', channelHash: 0x42, sentAt: 900 });
+
+    sends.attributeObservation(obs({ channelHash: 0x42 }), state, events);
+
+    const msg = state.getMessagesForKey('ch:test')[0];
+    expect(msg.state).toBe('sent');
+    expect(msg.meta?.paths).toBeUndefined();
   });
 
   it('returns false (and emits nothing) when no pending send matches', () => {
@@ -109,20 +136,6 @@ describe('PendingChannelSends.attributeObservation', () => {
     });
     const attributed = sends.attributeObservation(obs({ channelHash: 0x42 }), state, events);
     expect(attributed).toBe(false);
-    expect(fired).toBe(false);
-  });
-
-  it('returns false when the matched message is unknown to state', () => {
-    const sends = new PendingChannelSends();
-    const state = new SessionState();
-    const events = new MeshCoreEvents();
-    // Registered, but no message inserted → appendMessagePath returns null.
-    sends.register({ messageId: 'ghost', channelHash: 0x42, sentAt: 900 });
-    let fired = false;
-    events.on('messagePathHeard', () => {
-      fired = true;
-    });
-    expect(sends.attributeObservation(obs({ channelHash: 0x42 }), state, events)).toBe(false);
     expect(fired).toBe(false);
   });
 });

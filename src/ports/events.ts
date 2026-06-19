@@ -56,7 +56,11 @@ export interface MeshCoreEventMap {
   /** A single inserted/updated message — a delta companion to `messages`. */
   messageUpserted: (message: Message) => void;
   messageState: (id: string, state: MessageState) => void;
-  messagePathHeard: (p: { id: string; path: MessagePath; state: MessageState }) => void;
+  /** A heard repeater relay of one of your outgoing channel sends, correlated
+   *  back to the message id you passed to {@link registerChannelSend}. Carries
+   *  only the message id and the observed path — the library does not track
+   *  message state for this; the consumer owns it. */
+  messagePathHeard: (p: { messageId: string; path: MessagePath }) => void;
   owner: (owner: Owner | null) => void;
   radioSettings: (settings: RadioSettings) => void;
   repeaterStatus: (snap: RepeaterStatusSnapshot) => void;

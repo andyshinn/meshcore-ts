@@ -72,9 +72,15 @@ export class PendingChannelSends {
     return null;
   }
 
-  /** Full pipeline: match observation → build path → append to message →
-   *  broadcast on the bus. Returns true if attributed (so the caller can log /
-   *  skip further work). */
+  /** Match observation → build path → broadcast on the bus. Returns true if the
+   *  observation was attributed to a pending send (so the caller can log / skip
+   *  further work).
+   *
+   *  Intentionally does NOT touch the message store: the emit fires on a match
+   *  alone, regardless of whether the library happens to hold the message. This
+   *  keeps the library stateless about message ownership — consumers correlate
+   *  the emitted `messageId` to their own message and own its state. `state` is
+   *  read only for the owner name used to label the synthesized path origin. */
   attributeObservation(obs: MeshObservation, state: SessionState, events: MeshCoreEvents): boolean {
     const match = this.matchObservation(obs);
     if (!match) return false;
@@ -83,9 +89,7 @@ export class PendingChannelSends {
     // we synthesize the origin as our own radio so the path renders sink-side
     // correctly. The renderer's PathViewer treats the origin name as a label.
     const path = buildPath(obs.pathHex, obs.hashSize, obs.finalSnr, owner?.name ?? null, owner?.name);
-    const nextState = state.appendMessagePath(match.messageId, path);
-    if (!nextState) return false;
-    events.emit('messagePathHeard', { id: match.messageId, path, state: nextState });
+    events.emit('messagePathHeard', { messageId: match.messageId, path });
     return true;
   }
 

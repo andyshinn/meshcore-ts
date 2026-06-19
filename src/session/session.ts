@@ -438,7 +438,7 @@ export class MeshCoreSession {
           this.rt.meshObs.record(observation);
           // If this observation is a repeater relaying one of our recent
           // outgoing channel sends, attribute it back to that message — the
-          // helper appends a MessagePath and broadcasts messagePathHeard.
+          // helper broadcasts messagePathHeard with the message id and path.
           this.rt.pendingChannelSends.attributeObservation(observation, this.state, this.events);
         }
       }

@@ -84,7 +84,13 @@ await session.sendDmText('c:<pubkeyhex>', 'hello', 'msg-1');
 
 // Send to a channel:
 const { ok, channelHash } = await session.sendChannelText('ch:General', 'hi all');
-// Optional: attribute heard repeater relays back to your message (emits 'messagePathHeard'):
+// To learn which repeaters relayed your send back over the air, do BOTH:
+//   1. listen for 'messagePathHeard' — it carries { messageId, path }, and
+//   2. register the send so heard 0x88 relays correlate to your message id.
+// Registering alone surfaces nothing; the path arrives only via the event.
+session.events.on('messagePathHeard', ({ messageId, path }) => {
+  console.log(`message ${messageId} was relayed via`, path);
+});
 if (ok && channelHash != null) session.registerChannelSend({ messageId: 'msg-2', channelHash });
 ```
 
@@ -124,7 +130,7 @@ The session dispatches inbound frames through a `FeatureRegistry` of `Feature` m
 ## Examples
 
 Runnable examples live in [`examples/`](examples/) — the meshcore.js example set
-ported onto `MeshCoreSession` using the built-in serial and BLE transports. Run
+ported onto `MeshCoreSession` using the built-in serial, TCP, and BLE transports. Run
 any of them with `tsx` (no build step):
 
 ```

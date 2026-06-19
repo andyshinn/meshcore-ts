@@ -12,3 +12,8 @@ export {
 export { encodeSerialFrame, SerialDeframer } from './transports/serialFraming';
 export type { SerialPortLike } from './transports/serialTransport';
 export { SerialTransport as Serial } from './transports/serialTransport';
+export type { SocketLike, TcpTransportOptions } from './transports/tcpTransport';
+export {
+  createTcpTransport as createTcp,
+  TcpTransport as Tcp,
+} from './transports/tcpTransport';
