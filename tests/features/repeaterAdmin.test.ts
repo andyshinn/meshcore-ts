@@ -10,14 +10,18 @@ import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
 import { PendingChannelSends } from '../../src/features/pendingChannelSends';
 import {
+  buildAnonReplyPath,
   createAdminCorrRuntime,
   registerAdminHooks,
   repeaterAdminFeature,
   repeaterLogin,
   repeaterRequestAvgMinMax,
+  repeaterRequestOwnerInfo,
   repeaterSendCli,
   resetAdmin,
+  sendAnonReq,
   sendBinaryReq,
+  sendTelemetryReq,
 } from '../../src/features/repeaterAdmin';
 import { MeshObservations } from '../../src/model/meshObservations';
 import { SessionState } from '../../src/model/state/model';
@@ -71,6 +75,19 @@ function makeCtx(): {
 // 32-byte (64 hex) public key; first 6 bytes (12 hex) are the prefix.
 const PK = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899';
 const PREFIX = 'aabbccddeeff';
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+// RESP_SENT: [0x06][flood][expected_ack u32 LE][est u32 LE].
+function sentTag(tagHex: string): Buffer {
+  const f = Buffer.alloc(10);
+  f[0] = 0x06;
+  Buffer.from(tagHex, 'hex').copy(f, 2);
+  return f;
+}
+// PUSH_BINARY_RESPONSE: [0x8c][0][tag u32][body…].
+function binaryResp(tagHex: string, body: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([PUSH.BINARY_RESPONSE, 0x00]), Buffer.from(tagHex, 'hex'), body]);
+}
 
 function addContact(state: SessionState, overrides: Partial<Contact> = {}): Contact {
   const contact: Contact = {
@@ -263,6 +280,147 @@ describe('repeaterAdmin: sendBinaryReq (generic)', () => {
     repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, resp, ctx);
 
     await expect(p.then((b) => b.toString('hex'))).resolves.toBe('abcd');
+  });
+});
+
+describe('repeaterAdmin: buildAnonReplyPath', () => {
+  it('flood contact (no out_path) → zero-hop reply-path [0x00]', () => {
+    const { replyPath, isFlood } = buildAnonReplyPath({});
+    expect(isFlood).toBe(true);
+    expect(replyPath.toString('hex')).toBe('00');
+  });
+
+  it('1-byte-hash path reverses hop order; length byte packs hop count', () => {
+    // out_path aa bb cc (3 one-byte hops) → reversed route cc bb aa;
+    // packed byte = ((1-1)<<6) | 3 = 0x03
+    const { replyPath, isFlood } = buildAnonReplyPath({ outPathHex: 'aabbcc' });
+    expect(isFlood).toBe(false);
+    expect(replyPath.toString('hex')).toBe('03ccbbaa');
+  });
+
+  it('multi-byte-hash path reverses by HOP not by byte; packs hashSize into bits 7-6', () => {
+    // 2 hops × 2 bytes: [1122][3344] → reversed route [3344][1122]
+    // packed byte = ((2-1)<<6) | 2 = 0x42
+    const { replyPath } = buildAnonReplyPath({ outPathHex: '11223344', outPathHashSize: 2 });
+    expect(replyPath.toString('hex')).toBe('4233441122');
+  });
+});
+
+describe('repeaterAdmin: sendAnonReq', () => {
+  it('known-path contact: writes [0x39][32B][anonType][packed][reversed] and resolves the tagged body; no path mutation', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state, { outPathHex: 'aabbcc' });
+    registerAdminHooks(ctx);
+
+    const p = sendAnonReq(ctx, `c:${PK}`, 0x02);
+    // The only write is the anon frame — no zero-hop add-update for a pathed contact.
+    expect(writes).toHaveLength(1);
+    expect(writes[0][0]).toBe(0x39);
+    expect(writes[0].subarray(1, 33).toString('hex')).toBe(PK);
+    // [anonType=02][packed=03][reversed cc bb aa]
+    expect(writes[0].subarray(33).toString('hex')).toBe('0203ccbbaa');
+
+    directMessagesFeature.handle(0x06, sentTag('cafebabe'), ctx);
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('cafebabe', Buffer.from([0xde, 0xad])), ctx);
+    await expect(p.then((b) => b.toString('hex'))).resolves.toBe('dead');
+    // Pathed contact is never reset to flood.
+    expect(writes.some((w) => w[0] === 0x0d)).toBe(false);
+  });
+
+  it('flood contact: zero-hop dance — add-update(empty) → anon([type][0x00]) → reset to OUT_PATH_UNKNOWN', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state); // no out_path → flood
+    registerAdminHooks(ctx);
+
+    const p = sendAnonReq(ctx, `c:${PK}`, 0x02);
+    await tick(); // let the awaited zero-hop write + queue-push settle
+
+    // 1st write: CMD_ADD_UPDATE_CONTACT with a zero-hop (empty) path — byte 35 = 0.
+    expect(writes[0][0]).toBe(0x09);
+    expect(writes[0][35]).toBe(0x00);
+    // 2nd write: the anon frame with a zero-hop reply-path [anonType=02][0x00].
+    expect(writes[1][0]).toBe(0x39);
+    expect(writes[1].subarray(1, 33).toString('hex')).toBe(PK);
+    expect(writes[1].subarray(33).toString('hex')).toBe('0200');
+
+    directMessagesFeature.handle(0x06, sentTag('11223344'), ctx);
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('11223344', Buffer.from([0x01, 0x02])), ctx);
+    await expect(p.then((b) => b.toString('hex'))).resolves.toBe('0102');
+    await tick();
+
+    // The flood contact is restored to OUT_PATH_UNKNOWN via CMD_RESET_PATH — no
+    // leaked zero-hop path.
+    const reset = writes.find((w) => w[0] === 0x0d);
+    expect(reset).toBeDefined();
+    expect(reset?.subarray(1, 33).toString('hex')).toBe(PK);
+  });
+
+  it('flood contact: resets the path even when RESP_SENT never arrives (write-only, no leak)', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = sendAnonReq(ctx, `c:${PK}`, 0x02);
+    p.catch(() => {}); // will reject on resetAdmin
+    await tick();
+    expect(writes[0][0]).toBe(0x09); // zero-hop set happened
+
+    resetAdmin(ctx, 'disconnected'); // fail the in-flight RESP_SENT awaiter
+    await expect(p).rejects.toThrow('disconnected');
+    await tick();
+    // finally-net restored the flood path.
+    expect(writes.some((w) => w[0] === 0x0d)).toBe(true);
+  });
+});
+
+describe('repeaterAdmin: repeaterRequestOwnerInfo (anon OWNER)', () => {
+  it('uses CMD_SEND_ANON_REQ with OWNER (0x02) and parses [now][name\\nowner]', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state, { outPathHex: '01' }); // pathed → skip zero-hop dance
+    registerAdminHooks(ctx);
+
+    const p = repeaterRequestOwnerInfo(ctx, `c:${PK}`);
+    expect(writes[0][0]).toBe(0x39);
+    expect(writes[0][33]).toBe(0x02); // anonType = OWNER
+
+    directMessagesFeature.handle(0x06, sentTag('aabbccdd'), ctx);
+    const body = Buffer.concat([Buffer.alloc(4), Buffer.from('Node A\nowner notes\0', 'utf8')]);
+    body.writeUInt32LE(1700, 0);
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('aabbccdd', body), ctx);
+
+    await expect(p).resolves.toEqual({ firmwareVersion: '', nodeName: 'Node A', ownerInfo: 'owner notes' });
+  });
+});
+
+describe('repeaterAdmin: sendTelemetryReq (binary req)', () => {
+  it('sends CMD_SEND_BINARY_REQ [0x03] and surfaces the tagged LPP as repeaterTelemetry', async () => {
+    const { ctx, state, events, writes } = makeCtx();
+    addContact(state, { outPathHex: '01' });
+    registerAdminHooks(ctx);
+    const seen: Array<{ contactKey: string; fields: unknown[] }> = [];
+    events.on('repeaterTelemetry', (s) => seen.push(s as { contactKey: string; fields: unknown[] }));
+
+    const res = await sendTelemetryReq(ctx, `c:${PK}`);
+    expect(res).toEqual({ ok: true });
+    // frame = [0x32][32B pubkey][0x03]
+    expect(writes[0][0]).toBe(0x32);
+    expect(writes[0].subarray(1, 33).toString('hex')).toBe(PK);
+    expect(writes[0].subarray(33).toString('hex')).toBe('03');
+
+    directMessagesFeature.handle(0x06, sentTag('deadbeef'), ctx);
+    // tagged LPP: ch0 voltage 4.20 V
+    repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('deadbeef', Buffer.from([0x00, 0x74, 0x01, 0xa4])), ctx);
+    await tick();
+
+    expect(seen.at(-1)?.contactKey).toBe(`c:${PK}`);
+    expect(seen.at(-1)?.fields.length).toBeGreaterThan(0);
+  });
+
+  it('returns { ok:false } for an unknown contact without writing', async () => {
+    const { ctx, writes } = makeCtx();
+    const res = await sendTelemetryReq(ctx, 'c:nope');
+    expect(res.ok).toBe(false);
+    expect(writes).toHaveLength(0);
   });
 });
 

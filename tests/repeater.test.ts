@@ -10,9 +10,11 @@ import {
   buildSendStatusReq,
   buildSendTelemetryReq,
   buildSendTracePath,
+  parseAnonOwnerInfo,
   parseAvgMinMax,
   parseLoginSuccess,
   parseStatusResponse,
+  parseTelemetryLpp,
   parseTelemetryResponse,
   parseTraceData,
 } from '../src/protocol/repeater';
@@ -156,6 +158,52 @@ describe('repeater decoders: parseTelemetryResponse (CayenneLPP)', () => {
     const payload = Buffer.from([0x06, 0x87, 0xff, 0x80, 0x00]);
     const res = parseTelemetryResponse(telemetryFrame(payload));
     expect(res?.fields[0]).toMatchObject({ name: 'Colour', value: '255,128,0' });
+  });
+});
+
+describe('parseAnonOwnerInfo (anon OWNER response: [now u32][name\\nowner])', () => {
+  // Body layout after parseBinaryResponse strips the 4B tag:
+  //   [now u32 LE][node_name "\n" owner_info][\0…]
+  function ownerBody(now: number, name: string, owner: string): Buffer {
+    const text = Buffer.from(`${name}\n${owner}\0`, 'utf8'); // firmware null-terminates
+    const body = Buffer.alloc(4 + text.length);
+    body.writeUInt32LE(now >>> 0, 0);
+    text.copy(body, 4);
+    return body;
+  }
+
+  it('strips the leading `now` clock and splits name\\nowner', () => {
+    const res = parseAnonOwnerInfo(ownerBody(1_700_000_000, 'Node A', 'owner notes'));
+    expect(res).toEqual({ firmwareVersion: '', nodeName: 'Node A', ownerInfo: 'owner notes' });
+  });
+
+  it('null-trims the owner field (and anything past the terminator)', () => {
+    const body = Buffer.concat([Buffer.alloc(4), Buffer.from('Node B\nowner\0garbage', 'utf8')]);
+    body.writeUInt32LE(42, 0);
+    const res = parseAnonOwnerInfo(body);
+    expect(res?.nodeName).toBe('Node B');
+    expect(res?.ownerInfo).toBe('owner');
+  });
+
+  it('tolerates a missing owner line (no \\n)', () => {
+    const res = parseAnonOwnerInfo(ownerBody(1, 'JustName', ''));
+    expect(res).toEqual({ firmwareVersion: '', nodeName: 'JustName', ownerInfo: '' });
+  });
+
+  it('returns null when the body is too short for the `now` header', () => {
+    expect(parseAnonOwnerInfo(Buffer.alloc(3))).toBeNull();
+  });
+});
+
+describe('parseTelemetryLpp (binary-req telemetry: raw CayenneLPP, no header)', () => {
+  it('decodes LPP fields directly from the tagged binary-response payload', () => {
+    // ch0 voltage 4.20 V (type 0x74, u16 BE /100 → 420)
+    const fields = parseTelemetryLpp(Buffer.from([0x00, 0x74, 0x01, 0xa4]));
+    expect(fields[0]).toMatchObject({ channel: 0, name: 'Voltage', value: 4.2, unit: 'V' });
+  });
+
+  it('returns an empty array for an empty payload', () => {
+    expect(parseTelemetryLpp(Buffer.alloc(0))).toEqual([]);
   });
 });
 

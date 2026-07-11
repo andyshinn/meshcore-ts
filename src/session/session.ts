@@ -40,16 +40,16 @@ import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '.
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
-import { hashSizeFromOutPathLen } from '../model/contacts';
+import { contactKindToAdvType, hashSizeFromOutPathLen } from '../model/contacts';
 import type { ContactRecord } from '../model/contactTypes';
 import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../model/errors';
 import { SessionState } from '../model/state/model';
-import type { Channel, Contact, ContactKind, RawPacket, SyncProgress, TransportState } from '../model/types';
+import type { Channel, Contact, RawPacket, SyncProgress, TransportState } from '../model/types';
 import { DEFAULT_SYNC_PROGRESS } from '../model/types';
 import { MeshCoreEvents } from '../ports/events';
 import { type Logger, noopLogger } from '../ports/logger';
 import type { Transport } from '../ports/transport';
-import { ADV_TYPE, ERR_CODE, RESP, type STATS_TYPE } from '../protocol/codes';
+import { ERR_CODE, RESP, type STATS_TYPE } from '../protocol/codes';
 import { buildReboot, buildSendSelfAdvert } from '../protocol/encode';
 import { parseCompanionFrame } from '../protocol/frame';
 import { PAYLOAD_TYPE, parseMeshPacket } from '../protocol/meshPacket';
@@ -1530,8 +1530,27 @@ export class MeshCoreSession {
     return repeaterAdmin.repeaterRequestNeighbours(this.ctx, contactKey, opts);
   }
 
-  async repeaterRequestOwnerInfo(contactKey: string): Promise<OwnerInfo> {
+  /** Fetch a repeater's owner info via the PUBLIC anon OWNER request (works
+   *  without a login). Returns null if the response can't be parsed. */
+  async repeaterRequestOwnerInfo(contactKey: string): Promise<OwnerInfo | null> {
     return repeaterAdmin.repeaterRequestOwnerInfo(this.ctx, contactKey);
+  }
+
+  /** Low-level public anon request (CMD_SEND_ANON_REQ). `anonType` is one of
+   *  Protocol.ANON_REQ_TYPE (REGIONS=1, OWNER=2, BASIC/CLOCK=3). Resolves the
+   *  tagged response body. Prefer the typed wrappers below where they exist. */
+  async sendAnonReq(contactKey: string, anonType: number): Promise<Buffer> {
+    return repeaterAdmin.sendAnonReq(this.ctx, contactKey, anonType);
+  }
+
+  /** Public anon REGIONS request — the repeater's region-name listing. */
+  async repeaterRequestRegions(contactKey: string): Promise<string> {
+    return repeaterAdmin.requestRegions(this.ctx, contactKey);
+  }
+
+  /** Public anon CLOCK request — the repeater's RTC clock (unix seconds). */
+  async repeaterRequestClock(contactKey: string): Promise<number> {
+    return repeaterAdmin.requestClock(this.ctx, contactKey);
   }
 
   /** Send a generic binary request to a contact and resolve the raw response
@@ -1567,17 +1586,4 @@ export class MeshCoreSession {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function contactKindToAdvType(kind: ContactKind): number {
-  switch (kind) {
-    case 'repeater':
-      return ADV_TYPE.REPEATER;
-    case 'room':
-      return ADV_TYPE.ROOM;
-    case 'sensor':
-      return ADV_TYPE.SENSOR;
-    default:
-      return ADV_TYPE.CHAT;
-  }
 }

@@ -134,7 +134,10 @@ describe('direct-message send / ack state machine', () => {
   it('lets the admin hook consume RESP_SENT ahead of the DM queue', async () => {
     const { session, transport } = makeSession();
     stop = () => session.stop();
-    session.state.upsertContact({ key: `c:${PK}`, publicKeyHex: PK, name: 'Repeater', kind: 'repeater' });
+    // Give the contact a known out_path so the anon owner request skips the
+    // flood zero-hop dance — the admin RESP_SENT awaiter is then armed
+    // synchronously, making this seam test deterministic.
+    session.state.upsertContact({ key: `c:${PK}`, publicKeyHex: PK, name: 'Repeater', kind: 'repeater', outPathHex: '01' });
 
     const states: Array<{ id: string; state: string }> = [];
     const onState = (id: string, state: string) => states.push({ id, state });

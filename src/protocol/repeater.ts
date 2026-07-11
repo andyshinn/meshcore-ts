@@ -213,6 +213,29 @@ export function parseOwnerInfo(payload: Buffer): OwnerInfo {
   };
 }
 
+// Anon OWNER response body (ANON_REQ_TYPE_OWNER via CMD_SEND_ANON_REQ). This is
+// a DIFFERENT wire shape from the login-gated REQ_TYPE_GET_OWNER_INFO parsed by
+// parseOwnerInfo above. After parseBinaryResponse strips the 4-byte tag, the
+// remaining body is (firmware simple_repeater/MyMesh.cpp handleAnonOwnerReq):
+//   [now u32 LE]            — the repeater's RTC clock (for clock-sync)
+//   [node_name "\n" owner_info "\0"…]
+// so there is no firmware-version field here — we map name→nodeName,
+// owner→ownerInfo and leave firmwareVersion empty to keep the OwnerInfo shape.
+// Mirrors meshcore_py binary.py req_owner_sync. Returns null if the body is too
+// short to even hold the `now` header.
+export function parseAnonOwnerInfo(payload: Buffer): OwnerInfo | null {
+  if (payload.length < 4) return null;
+  const text = payload.subarray(4).toString('utf8');
+  const nl = text.indexOf('\n');
+  const rawName = nl === -1 ? text : text.slice(0, nl);
+  const rawOwner = nl === -1 ? '' : text.slice(nl + 1);
+  const stripNull = (s: string): string => {
+    const i = s.indexOf('\0');
+    return i === -1 ? s : s.slice(0, i);
+  };
+  return { firmwareVersion: '', nodeName: stripNull(rawName), ownerInfo: stripNull(rawOwner) };
+}
+
 // RESP_CODE_STATS reply to CMD_GET_STATS. Second byte is the subtype echo;
 // remaining bytes depend on subtype. Firmware: MyMesh.cpp:1822-1872.
 export type LocalStats =
@@ -505,6 +528,16 @@ export function parseTelemetryResponse(frame: Buffer): TelemetryResponse | null 
     payloadHex: payload.toString('hex'),
     fields: decodeCayenneLPP(payload),
   };
+}
+
+// Decode a bare CayenneLPP telemetry blob into fields. Used for the
+// CMD_SEND_BINARY_REQ(TELEMETRY) path where the tagged PUSH_BINARY_RESPONSE
+// payload IS the raw LPP (no [reserved][6B prefix] header like the standalone
+// PUSH_TELEMETRY_RESPONSE has, and no leading `now` clock like the anon owner
+// response) — firmware handleRequest writes the telemetry buffer straight after
+// the 4-byte tag. Mirrors meshcore_py reader.py (lpp_parse on response_data).
+export function parseTelemetryLpp(lpp: Buffer): TelemetryField[] {
+  return decodeCayenneLPP(lpp);
 }
 
 interface CayenneDescriptor {

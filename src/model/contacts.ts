@@ -59,3 +59,19 @@ export function advTypeToKind(type: number): ContactKind {
       return 'chat';
   }
 }
+
+/** Inverse of {@link advTypeToKind}: map a ContactKind to the MeshCore ADV_TYPE
+ *  byte used in CMD_ADD_UPDATE_CONTACT. Kept beside advTypeToKind so the two
+ *  stay in lockstep (values mirror ADV_TYPE in protocol/codes). */
+export function contactKindToAdvType(kind: ContactKind): number {
+  switch (kind) {
+    case 'repeater':
+      return 2;
+    case 'room':
+      return 3;
+    case 'sensor':
+      return 4;
+    default:
+      return 1;
+  }
+}

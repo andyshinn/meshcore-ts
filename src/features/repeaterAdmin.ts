@@ -1,35 +1,39 @@
 import { Buffer } from 'node:buffer';
-import { PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
+import { contactKindToAdvType } from '../model/contacts';
+import type { Contact } from '../model/types';
+import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
   type AvgMinMaxResult,
   buildAnonLogin,
   buildGetStats,
   buildLogout,
+  buildSendAnonReq,
   buildSendBinaryReq,
   buildSendLogin,
   buildSendStatusReq,
-  buildSendTelemetryReq,
   buildSendTracePath,
   type LocalStats,
   type LoginSuccess,
   type NeighboursPage,
   type OwnerInfo,
   parseAclList,
+  parseAnonOwnerInfo,
   parseAvgMinMax,
   parseBinaryResponse,
   parseLocalStats,
   parseLoginFail,
   parseLoginSuccess,
   parseNeighbours,
-  parseOwnerInfo,
   parseRawData,
   parseStatusResponse,
+  parseTelemetryLpp,
   parseTelemetryResponse,
   parseTraceData,
   type TraceData,
 } from '../protocol/repeater';
 import type { AdminMode, AdminRole } from './adminSessions';
+import { encodeAddUpdateContact, encodeResetPath } from './contacts';
 import * as directMessages from './directMessages';
 import type { Feature, FeatureContext } from './feature';
 
@@ -140,15 +144,60 @@ function lookupRepeaterContact(
   return { ok: true, publicKeyHex: contact.publicKeyHex };
 }
 
-/** Generic mesh request (ACL / neighbours / owner / avg-min-max, or any custom
- *  REQ_TYPE). Issues CMD_SEND_BINARY_REQ, parks an awaiter for the matching
- *  PUSH_BINARY_RESPONSE tag, and returns the response body (which the caller
- *  decodes per req_type). `reqData` is `[REQ_TYPE byte, ...params]`.
+/** Write a pre-built request frame, park an admin RESP_SENT awaiter for the tag
+ *  the firmware echoes, then resolve the matching PUSH_BINARY_RESPONSE body.
+ *  Shared by CMD_SEND_BINARY_REQ (sendBinaryReq) and CMD_SEND_ANON_REQ
+ *  (sendAnonReq) — both correlate their reply by the same tag seam.
+ *
+ *  `onSent` (optional) fires synchronously when RESP_SENT arrives, carrying the
+ *  tag — sendAnonReq uses it to restore a flood contact's path the instant the
+ *  packet is on its way (mirrors meshcore_py's reset-after-send).
  *
  *  Implementation note: `awaitTag` is registered synchronously inside the
  *  adminSentQueue resolver so that a PUSH_BINARY_RESPONSE arriving in the same
  *  synchronous turn as RESP_SENT (as happens in tests and under tight firmware
  *  timing) does not race past the awaiter registration. */
+function sendTaggedReq(
+  ctx: FeatureContext,
+  frame: Buffer,
+  timeoutMs: number,
+  onSent?: (tagHex: string) => void,
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const queue = ctx.rt.adminCorr.adminSentQueue;
+    const timer = setTimeout(() => {
+      const i = queue.indexOf(entry);
+      if (i !== -1) queue.splice(i, 1);
+      reject(new Error(`admin RESP_SENT timed out after ${ADMIN_SENT_TIMEOUT_MS}ms`));
+    }, ADMIN_SENT_TIMEOUT_MS);
+    const entry: PendingAdminSent = {
+      resolve: (tagHex) => {
+        // Register the payload awaiter synchronously inside the RESP_SENT
+        // resolver so a PUSH_BINARY_RESPONSE that arrives in the same
+        // synchronous turn (e.g. tight firmware ack) is never missed.
+        ctx.admin.awaitTag<Buffer>(tagHex, timeoutMs).then(resolve, reject);
+        onSent?.(tagHex);
+      },
+      reject,
+      timer,
+    };
+    queue.push(entry);
+    ctx.writeFrame(frame).catch((err) => {
+      const i = queue.indexOf(entry);
+      if (i !== -1) queue.splice(i, 1);
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+/** Generic mesh request (ACL / neighbours / avg-min-max, or any custom
+ *  REQ_TYPE). Issues CMD_SEND_BINARY_REQ, parks an awaiter for the matching
+ *  PUSH_BINARY_RESPONSE tag, and returns the response body (which the caller
+ *  decodes per req_type). `reqData` is `[REQ_TYPE byte, ...params]`.
+ *
+ *  NOTE: this is the LOGIN/ACL-gated request family. Public repeaters answer
+ *  OWNER / REGIONS / CLOCK only over the anon family — see sendAnonReq. */
 export function sendBinaryReq(
   ctx: FeatureContext,
   contactKey: string,
@@ -163,31 +212,99 @@ export function sendBinaryReq(
   } catch (err) {
     return Promise.reject(err);
   }
-  return new Promise<Buffer>((resolve, reject) => {
-    const queue = ctx.rt.adminCorr.adminSentQueue;
-    const timer = setTimeout(() => {
-      const i = queue.indexOf(entry);
-      if (i !== -1) queue.splice(i, 1);
-      reject(new Error(`admin RESP_SENT timed out after ${ADMIN_SENT_TIMEOUT_MS}ms`));
-    }, ADMIN_SENT_TIMEOUT_MS);
-    const entry: PendingAdminSent = {
-      resolve: (tagHex) => {
-        // Register the payload awaiter synchronously inside the RESP_SENT
-        // resolver so a PUSH_BINARY_RESPONSE that arrives in the same
-        // synchronous turn (e.g. tight firmware ack) is never missed.
-        ctx.admin.awaitTag<Buffer>(tagHex, timeoutMs).then(resolve, reject);
-      },
-      reject,
-      timer,
-    };
-    queue.push(entry);
-    ctx.writeFrame(frame).catch((err) => {
-      const i = queue.indexOf(entry);
-      if (i !== -1) queue.splice(i, 1);
-      clearTimeout(timer);
-      reject(err);
+  return sendTaggedReq(ctx, frame, timeoutMs);
+}
+
+/** Build the reverse reply-path an anon request must carry so the repeater can
+ *  answer it DIRECT (anon OWNER/REGIONS/CLOCK are direct-only). The bytes are
+ *  `[out_path_len][reversed out_path]` where `out_path_len` is the packed
+ *  MeshCore path byte `((hashSize-1)<<6)|hopCount` — exactly what the repeater
+ *  reads back (firmware handleAnon*Req: `*data & 63` hops, `(*data>>6)+1` size).
+ *
+ *  A flood contact (no out_path) yields the zero-hop reply `[0x00]`; the caller
+ *  then temporarily gives the radio a zero-hop path so the send goes direct.
+ *
+ *  The route is reversed by HOP (hop order flipped, each hop's bytes kept in
+ *  order), which is correct for every hash size and reduces to a plain byte
+ *  reversal for the common 1-byte mode. (meshcore_py byte-reverses the whole
+ *  path, which is only right for 1-byte hashes.) */
+export function buildAnonReplyPath(contact: Pick<Contact, 'outPathHex' | 'outPathHashSize'>): {
+  replyPath: Buffer;
+  isFlood: boolean;
+} {
+  const pathHex = contact.outPathHex ?? '';
+  if (pathHex.length === 0) {
+    return { replyPath: Buffer.from([0x00]), isFlood: true };
+  }
+  const pathBytes = Buffer.from(pathHex, 'hex');
+  const hashSize = contact.outPathHashSize ?? 1;
+  const hopCount = Math.floor(pathBytes.length / hashSize);
+  const reversed = Buffer.alloc(hopCount * hashSize);
+  for (let h = 0; h < hopCount; h += 1) {
+    const src = (hopCount - 1 - h) * hashSize;
+    pathBytes.copy(reversed, h * hashSize, src, src + hashSize);
+  }
+  const packed = (((hashSize - 1) & 0x03) << 6) | (hopCount & 0x3f);
+  return { replyPath: Buffer.concat([Buffer.from([packed]), reversed]), isFlood: false };
+}
+
+/** Public anon request (CMD_SEND_ANON_REQ, 0x39). Unlike sendBinaryReq this is
+ *  NOT login-gated — it's how a client reads OWNER (0x02) / REGIONS (0x01) /
+ *  CLOCK (0x03) from a repeater that serves them publicly. The repeater answers
+ *  these only over a DIRECT route, so the app payload carries a reverse
+ *  reply-path and, when the contact is flood-only, we temporarily install a
+ *  zero-hop path on the radio so the request is sent direct, restoring flood
+ *  afterwards (mirrors meshcore_py send_anon_req). Resolves the tagged
+ *  PUSH_BINARY_RESPONSE body. */
+export async function sendAnonReq(
+  ctx: FeatureContext,
+  contactKey: string,
+  anonType: number,
+  timeoutMs: number = ADMIN_REPLY_TIMEOUT_MS,
+): Promise<Buffer> {
+  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  if (!contact) throw new Error(`unknown contact ${contactKey}`);
+  if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
+    throw new Error(`contact ${contactKey} has no full 32B public key`);
+  }
+  const { replyPath, isFlood } = buildAnonReplyPath(contact);
+  const data = Buffer.concat([Buffer.from([anonType & 0xff]), replyPath]);
+  const frame = buildSendAnonReq(contact.publicKeyHex, data);
+
+  // Restore a flood contact's path exactly once (on RESP_SENT, or as a
+  // finally-net if the send never confirms) so no zero-hop path leaks.
+  let restored = false;
+  const restoreFlood = async (): Promise<void> => {
+    if (!isFlood || restored) return;
+    restored = true;
+    try {
+      await ctx.writeFrame(encodeResetPath(contact.publicKeyHex));
+    } catch (err) {
+      ctx.log.warn(`anon req: path reset failed for ${contactKey}: ${(err as Error).message}`);
+    }
+  };
+
+  if (isFlood) {
+    // Temporarily give the radio a zero-hop (empty) path so BaseChatMesh sends
+    // this ANON_REQ DIRECT (out_path_len != OUT_PATH_UNKNOWN) — a flooded anon
+    // OWNER/REGIONS/CLOCK is answered only with a path-return, never the data.
+    await ctx.writeFrame(
+      encodeAddUpdateContact({
+        publicKeyHex: contact.publicKeyHex,
+        advType: contactKindToAdvType(contact.kind),
+        flags: contact.favourite ? 0x01 : 0x00,
+        outPathHex: '',
+        name: contact.name,
+      }),
+    );
+  }
+  try {
+    return await sendTaggedReq(ctx, frame, timeoutMs, () => {
+      void restoreFlood();
     });
-  });
+  } finally {
+    await restoreFlood();
+  }
 }
 
 // ---- Public methods ----------------------------------------------------
@@ -209,19 +326,38 @@ export async function sendStatusReq(ctx: FeatureContext, contactKey: string): Pr
   }
 }
 
-/** Request a CayenneLPP telemetry blob from a contact. See sendStatusReq. */
+/** Request a CayenneLPP telemetry blob from a contact. Returns `ok` once the
+ *  request is accepted (contact validated + request fired); the decoded
+ *  telemetry arrives asynchronously via the `repeaterTelemetry` event.
+ *
+ *  Uses CMD_SEND_BINARY_REQ(TELEMETRY=0x03) — the firmware deprecated the old
+ *  CMD_SEND_TELEMETRY_REQ in its favour. The reply is now a tag-matched
+ *  PUSH_BINARY_RESPONSE (raw LPP) instead of the standalone
+ *  PUSH_TELEMETRY_RESPONSE, so we correlate it here and re-emit the SAME
+ *  `repeaterTelemetry` snapshot shape consumers already handle. */
 export async function sendTelemetryReq(ctx: FeatureContext, contactKey: string): Promise<{ ok: boolean; error?: string }> {
   const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
   if (!contact) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
   }
-  try {
-    await ctx.writeFrame(buildSendTelemetryReq(contact.publicKeyHex));
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  }
+  sendBinaryReq(ctx, contactKey, Buffer.from([REQ_TYPE.GET_TELEMETRY_DATA]))
+    .then((lpp) => emitTelemetryFromBinary(ctx, contactKey, lpp))
+    .catch((err) => ctx.log.debug(`telemetry req for ${contactKey} failed: ${(err as Error).message}`));
+  return { ok: true };
+}
+
+/** Decode a tag-matched telemetry LPP payload and emit `repeaterTelemetry` with
+ *  the same snapshot shape as the PUSH_TELEMETRY_RESPONSE path. */
+function emitTelemetryFromBinary(ctx: FeatureContext, contactKey: string, lpp: Buffer): void {
+  const fields = parseTelemetryLpp(lpp);
+  ctx.events.emit('repeaterTelemetry', {
+    contactKey,
+    receivedAt: Date.now(),
+    payloadHex: lpp.toString('hex'),
+    fields,
+  });
+  ctx.log.debug(`telemetry (binary) from "${contactKey}" payload=${lpp.length}B fields=${fields.length}`);
 }
 
 /** Login to a repeater. The wire mode is derived from the contact's current
@@ -312,10 +448,31 @@ export async function repeaterRequestNeighbours(
   return parsed;
 }
 
-export async function repeaterRequestOwnerInfo(ctx: FeatureContext, contactKey: string): Promise<OwnerInfo> {
-  const reqData = Buffer.from([REQ_TYPE.GET_OWNER_INFO]);
-  const payload = await sendBinaryReq(ctx, contactKey, reqData);
-  return parseOwnerInfo(payload);
+/** Fetch a repeater's owner info. Uses the PUBLIC anon OWNER request (0x02), not
+ *  the login-gated REQ_TYPE_GET_OWNER_INFO — so it works against a repeater that
+ *  serves us without a login. The anon response is `name\nowner` (no firmware
+ *  version), mapped into the existing OwnerInfo shape with an empty
+ *  `firmwareVersion`. Returns null if the response can't be parsed. */
+export async function repeaterRequestOwnerInfo(ctx: FeatureContext, contactKey: string): Promise<OwnerInfo | null> {
+  const payload = await sendAnonReq(ctx, contactKey, ANON_REQ_TYPE.OWNER);
+  return parseAnonOwnerInfo(payload);
+}
+
+/** Public anon REGIONS request (0x01). Resolves the repeater's region-name
+ *  listing (the leading `now` clock + null padding are stripped). */
+export async function requestRegions(ctx: FeatureContext, contactKey: string): Promise<string> {
+  const payload = await sendAnonReq(ctx, contactKey, ANON_REQ_TYPE.REGIONS);
+  const text = payload.subarray(4).toString('utf8');
+  const nul = text.indexOf('\0');
+  return nul === -1 ? text : text.slice(0, nul);
+}
+
+/** Public anon CLOCK/BASIC request (0x03). Resolves the repeater's RTC clock in
+ *  unix seconds — the `now` field every anon response is prefixed with. */
+export async function requestClock(ctx: FeatureContext, contactKey: string): Promise<number> {
+  const payload = await sendAnonReq(ctx, contactKey, ANON_REQ_TYPE.BASIC);
+  if (payload.length < 4) throw new Error('clock response too short');
+  return payload.readUInt32LE(0);
 }
 
 /** Request a min/max/avg series window from a sensor (REQ_TYPE_GET_AVG_MIN_MAX).
