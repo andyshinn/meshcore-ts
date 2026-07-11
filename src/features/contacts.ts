@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
-import { advTypeToKind, hopsFromOutPathLen } from '../model/contacts';
+import { advTypeToKind, hashSizeFromOutPathLen, hopsFromOutPathLen } from '../model/contacts';
 import type { ContactRecord, ContactSource } from '../model/contactTypes';
-import type { Contact } from '../model/types';
+import type { Contact, PathHashSize } from '../model/types';
 import { ADV_TYPE, CMD, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
 import type { Feature, FeatureContext } from './feature';
@@ -18,6 +18,10 @@ export interface UpdateContactInput {
   flags: number;
   /** Hex string of the out_path bytes (length <= 64). Empty = flood. */
   outPathHex: string;
+  /** Bytes-per-hop for the out_path, used to pack the firmware path_len byte
+   *  (byte 35). Defaults to 1 (each hop is one hash byte). Must divide the
+   *  outPathHex byte length. */
+  outPathHashSize?: PathHashSize;
   /** UTF-8 name; truncated to 31 bytes (leaving room for the null terminator). */
   name: string;
   /** Wall-clock unix seconds for the firmware's `timestamp` slot. Falls back
@@ -55,6 +59,14 @@ export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
   if (path.length > 64) {
     throw new Error(`out_path is ${path.length}B, max 64`);
   }
+  const hashSize = input.outPathHashSize ?? 1;
+  if (path.length % hashSize !== 0) {
+    throw new Error(`out_path is ${path.length}B, not a multiple of hashSize ${hashSize}`);
+  }
+  const hopCount = path.length / hashSize;
+  if (hopCount > 0x3f) {
+    throw new Error(`out_path is ${hopCount} hops, max 63`);
+  }
   const name = Buffer.from(input.name, 'utf8').subarray(0, 31);
 
   const hasTail = input.gpsLat !== undefined && input.gpsLon !== undefined && input.lastAdvertUnix !== undefined;
@@ -64,7 +76,9 @@ export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
   pubkey.copy(out, 1, 0, 32);
   out[33] = input.advType & 0xff;
   out[34] = input.flags & 0xff;
-  out[35] = path.length & 0xff;
+  // Pack the firmware path_len byte: bits 7-6 = hashSize-1, bits 5-0 = hop
+  // count. An empty path stays 0 (no source-route).
+  out[35] = path.length === 0 ? 0 : (((hashSize - 1) & 0x03) << 6) | (hopCount & 0x3f);
   path.copy(out, 36); // remainder of the 64B region stays zero-padded
   name.copy(out, 100);
   const ts = input.timestampUnix ?? Math.floor(Date.now() / 1000);
@@ -116,9 +130,12 @@ export function decodeContact(frame: Buffer): ContactRecord | null {
   const type = frame[33];
   const flags = frame[34];
   const outPathLen = frame[35];
-  // 0xFF means flood/unknown — no path bytes. Clamp corrupt values (65..254) to
-  // the 64-byte region so we never read past frame[99].
-  const outPathHex = outPathLen === 0xff ? '' : frame.subarray(36, 36 + Math.min(outPathLen, 64)).toString('hex');
+  // out_path_len is the packed firmware path_len byte (bits 7-6 = hashSize-1,
+  // bits 5-0 = hop count); the real path occupies hops × hashSize bytes. 0xFF
+  // means flood/unknown → no path bytes. Clamp to the 64-byte region so an
+  // over-long path never reads past frame[99].
+  const outPathByteLen = outPathLen === 0xff ? 0 : (outPathLen & 0x3f) * ((outPathLen >> 6) + 1);
+  const outPathHex = frame.subarray(36, 36 + Math.min(outPathByteLen, 64)).toString('hex');
   const nameRegion = frame.subarray(100, 132);
   const firstNull = nameRegion.indexOf(0);
   const nameBytes = firstNull === -1 ? nameRegion : nameRegion.subarray(0, firstNull);
@@ -204,7 +221,7 @@ export function createContactsIterRuntime(): ContactsIterRuntime {
 
 /** Push the full discovered pool to the renderer. */
 export function emitDiscovered(ctx: FeatureContext): void {
-  ctx.events.emit('discovered', ctx.state.discovered.list(ctx.state.getRadioSettings().pathHashMode));
+  ctx.events.emit('discovered', ctx.state.discovered.list());
 }
 
 /** Whether the firmware would auto-store an advert of this ADV_TYPE, given the
@@ -280,7 +297,6 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
   const existing = ctx.state.getContacts().find((c) => c.key === fullKey);
   // The radio re-pushes the full contact record on every advert; preserve
   // local-only fields the firmware doesn't know about.
-  const hashSize = ctx.state.getRadioSettings().pathHashMode;
   const advertOutPathHex = record.outPathLen === 0xff ? '' : record.outPathHex;
   // Don't let a stray advert that reports "no path" wipe a path the user
   // just set manually — the firmware can occasionally re-emit a contact
@@ -288,8 +304,12 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
   // advert was generated mid-flight). Only allow overwrites when the advert
   // carries a non-empty path, OR when the existing entry wasn't manually
   // set. Auto-learned paths (pathManual=false) still defer to firmware.
-  const newOutPathHex =
-    advertOutPathHex.length === 0 && existing?.pathManual === true ? (existing.outPathHex ?? '') : advertOutPathHex;
+  const keepManualPath = advertOutPathHex.length === 0 && existing?.pathManual === true;
+  const newOutPathHex = keepManualPath ? (existing.outPathHex ?? '') : advertOutPathHex;
+  // The hash size comes from the contact's OWN out_path_len byte (bits 7-6 + 1),
+  // never the radio's current path-hash mode — a contact learned in 2-byte mode
+  // keeps a 2-byte path even if the radio later switches modes.
+  const newOutPathHashSize = keepManualPath ? existing?.outPathHashSize : hashSizeFromOutPathLen(record.outPathLen);
   const pathChanged = (existing?.outPathHex ?? '') !== newOutPathHex;
 
   const contact: Contact = {
@@ -301,7 +321,7 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
     hops: hopsFromOutPathLen(record.outPathLen),
     favourite: (record.flags & 0x01) !== 0,
     outPathHex: newOutPathHex || undefined,
-    outPathHashSize: newOutPathHex ? hashSize : existing?.outPathHashSize,
+    outPathHashSize: newOutPathHex ? newOutPathHashSize : existing?.outPathHashSize,
     preferDirect: existing?.preferDirect,
     // If the radio's view of the path drifted away from a path the user set
     // by hand, drop the manual flag — the firmware is the source of truth.

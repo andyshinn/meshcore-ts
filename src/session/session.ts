@@ -40,6 +40,7 @@ import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '.
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
+import { hashSizeFromOutPathLen } from '../model/contacts';
 import type { ContactRecord } from '../model/contactTypes';
 import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../model/errors';
 import { SessionState } from '../model/state/model';
@@ -841,6 +842,7 @@ export class MeshCoreSession {
       advType: contactKindToAdvType(contact.kind),
       flags: 0,
       outPathHex,
+      outPathHashSize: outPathHex ? hashSize : undefined,
       name: contact.name,
     });
     await this.writeFrame(frame);
@@ -890,6 +892,7 @@ export class MeshCoreSession {
       advType: row.type,
       flags: row.flags,
       outPathHex: row.out_path_len === 0xff ? '' : row.out_path_hex,
+      outPathHashSize: hashSizeFromOutPathLen(row.out_path_len),
       name: row.name,
       ...(hasFix ? { gpsLat: row.gps_lat, gpsLon: row.gps_lon, lastAdvertUnix: row.last_advert_unix } : {}),
     });
@@ -956,6 +959,7 @@ export class MeshCoreSession {
         advType: row.type,
         flags,
         outPathHex: row.out_path_len === 0xff ? '' : row.out_path_hex,
+        outPathHashSize: hashSizeFromOutPathLen(row.out_path_len),
         name: row.name,
         ...(hasFix ? { gpsLat: row.gps_lat, gpsLon: row.gps_lon, lastAdvertUnix: row.last_advert_unix } : {}),
       });

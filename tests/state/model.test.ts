@@ -284,7 +284,7 @@ describe('SessionState discovered pool delegation', () => {
     s.upsertDiscovered(rec, { onRadio: false, nowMs: 5000, heardLive: true });
     expect(s.getDiscovered('aa'.repeat(32))?.name).toBe('Alice');
     expect(s.discovered.get('aa'.repeat(32))?.name).toBe('Alice');
-    const list = s.listDiscovered(s.getRadioSettings().pathHashMode);
+    const list = s.listDiscovered();
     expect(list.length).toBe(1);
     expect(list[0].publicKeyHex).toBe('aa'.repeat(32));
   });

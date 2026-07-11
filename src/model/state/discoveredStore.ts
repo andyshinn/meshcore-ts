@@ -1,5 +1,4 @@
-import { advTypeToKind, type DiscoveredContact, hopsFromOutPathLen } from '../contacts';
-import type { PathHashSize } from '../types';
+import { advTypeToKind, type DiscoveredContact, hashSizeFromOutPathLen, hopsFromOutPathLen } from '../contacts';
 
 /** Snake_case row shape mirroring the donor sqlite `discovered_contacts` table.
  *  Kept identical so the (later-ported) contacts feature can reference
@@ -38,9 +37,13 @@ export interface DiscoveredUpsertRecord {
   lastmod: number;
 }
 
-function rowToDiscovered(row: DiscoveredRow, hashSize: PathHashSize): DiscoveredContact {
+function rowToDiscovered(row: DiscoveredRow): DiscoveredContact {
   const hasFix = row.gps_lat !== 0 || row.gps_lon !== 0;
-  const hasPath = row.out_path_len !== 0xff && row.out_path_len > 0;
+  // A path exists only when the packed out_path_len carries a non-zero hop
+  // count. A direct contact (0 hops, e.g. 0x40 in 2-byte mode) and 0xFF (flood)
+  // both have no path bytes. hashSize comes from the contact's OWN out_path_len,
+  // never the radio's current path-hash mode.
+  const hasPath = row.out_path_len !== 0xff && (row.out_path_len & 0x3f) > 0;
   return {
     key: `c:${row.pubkey}`,
     publicKeyHex: row.pubkey,
@@ -48,7 +51,7 @@ function rowToDiscovered(row: DiscoveredRow, hashSize: PathHashSize): Discovered
     kind: advTypeToKind(row.type),
     hops: hopsFromOutPathLen(row.out_path_len),
     outPathHex: hasPath ? row.out_path_hex : undefined,
-    outPathHashSize: hasPath ? hashSize : undefined,
+    outPathHashSize: hasPath ? hashSizeFromOutPathLen(row.out_path_len) : undefined,
     gpsLat: hasFix ? row.gps_lat : undefined,
     gpsLon: hasFix ? row.gps_lon : undefined,
     lastAdvertMs: row.last_advert_unix > 0 ? row.last_advert_unix * 1000 : undefined,
@@ -115,12 +118,11 @@ export class DiscoveredStore {
     });
   }
 
-  /** Projected list ordered by `last_advert_unix` descending. `hashSize` is the
-   *  radio's current path-hash mode, used to split learned out-paths. */
-  list(hashSize: PathHashSize): DiscoveredContact[] {
-    return [...this.rows.values()]
-      .sort((a, b) => b.last_advert_unix - a.last_advert_unix)
-      .map((r) => rowToDiscovered(r, hashSize));
+  /** Projected list ordered by `last_advert_unix` descending. Each contact's
+   *  path hash size is derived from its own out_path_len byte, so no radio-mode
+   *  argument is needed. */
+  list(): DiscoveredContact[] {
+    return [...this.rows.values()].sort((a, b) => b.last_advert_unix - a.last_advert_unix).map(rowToDiscovered);
   }
 
   get(pubkey: string): DiscoveredRow | null {

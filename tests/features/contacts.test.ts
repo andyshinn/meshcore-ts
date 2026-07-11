@@ -13,6 +13,7 @@ import {
   encodeResetPath,
 } from '../../src/features/contacts';
 import type { Models } from '../../src/index';
+import { hashSizeFromOutPathLen, hopsFromOutPathLen } from '../../src/model/contacts';
 import { deliver, makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');
@@ -102,6 +103,66 @@ describe('contacts encoders', () => {
     expect(out.readUInt32LE(132)).toBe(5);
   });
 
+  it('encodeAddUpdateContact packs out_path_len from hop count + hashSize (2-byte mode)', () => {
+    const out = encodeAddUpdateContact({
+      publicKeyHex: pk,
+      advType: 1,
+      flags: 0,
+      outPathHex: 'aabbccdd', // 4 bytes = 2 hops × 2-byte hash
+      outPathHashSize: 2,
+      name: 'Bob',
+      timestampUnix: 5,
+    });
+    expect(out[35]).toBe(0x42); // hashSize-1=1 in bits 7-6, hop count=2 in bits 5-0
+    expect(out.subarray(36, 40).toString('hex')).toBe('aabbccdd');
+  });
+
+  it('encodeAddUpdateContact defaults to 1-byte hashSize when outPathHashSize is omitted', () => {
+    const out = encodeAddUpdateContact({
+      publicKeyHex: pk,
+      advType: 1,
+      flags: 0,
+      outPathHex: 'a1b2', // 2 bytes = 2 hops × 1-byte hash
+      name: 'Bob',
+      timestampUnix: 5,
+    });
+    expect(out[35]).toBe(0x02);
+  });
+
+  it('encodeAddUpdateContact rejects a path length not divisible by hashSize', () => {
+    expect(() =>
+      encodeAddUpdateContact({
+        publicKeyHex: pk,
+        advType: 1,
+        flags: 0,
+        outPathHex: 'aabbcc', // 3 bytes, not a multiple of hashSize 2
+        outPathHashSize: 2,
+        name: 'Bob',
+        timestampUnix: 5,
+      }),
+    ).toThrow(/multiple|hashSize|hash size/i);
+  });
+
+  it('round-trips a 2-byte-mode path through encode → decode', () => {
+    const out = encodeAddUpdateContact({
+      publicKeyHex: pk,
+      advType: 1,
+      flags: 0,
+      outPathHex: 'aabbccdd',
+      outPathHashSize: 2,
+      name: 'Bob',
+      timestampUnix: 5,
+      gpsLat: 0, // include the tail so the frame is a full 148 bytes for decode
+      gpsLon: 0,
+      lastAdvertUnix: 0,
+    });
+    const c = decodeContact(out);
+    expect(c?.outPathLen).toBe(0x42);
+    expect(c?.outPathHex).toBe('aabbccdd');
+    expect(hopsFromOutPathLen(c?.outPathLen ?? 0)).toBe(2);
+    expect(hashSizeFromOutPathLen(c?.outPathLen ?? 0)).toBe(2);
+  });
+
   it('encodeAddUpdateContact includes the GPS tail when provided (148 bytes)', () => {
     const out = encodeAddUpdateContact({
       publicKeyHex: pk,
@@ -181,26 +242,67 @@ describe('contacts decoders', () => {
     expect(c?.outPathHex).toBe('');
   });
 
-  it('decodeContact clamps a corrupt outPathLen (>64) to 64 bytes, not beyond', () => {
+  it('decodeContact reads a direct 2-byte-mode path (0x40) as zero path bytes, not 64', () => {
     const frame = Buffer.alloc(148);
     frame[0] = 0x03;
     Buffer.alloc(32, 0x44).copy(frame, 1);
     frame[33] = 1;
     frame[34] = 0;
-    frame[35] = 100; // corrupt: claims 100 bytes but the region is only 64 (frame[36..99])
-    // Fill path region with a known pattern so we can verify the slice length.
-    frame.fill(0xcc, 36, 100); // 64 bytes of 0xcc
+    frame[35] = 0x40; // packed: hashSize=2, hop count=0 → direct, 0 path bytes
+    // Fill the (unused) path buffer with garbage to prove it is not read.
+    frame.fill(0xcc, 36, 100);
     const c = decodeContact(frame);
-    expect(c?.outPathHex).toBe('cc'.repeat(64)); // clamped to 64, not 100
+    expect(c?.outPathLen).toBe(0x40); // raw packed byte preserved
+    expect(c?.outPathHex).toBe(''); // 0 hops × 2 bytes = 0 path bytes
   });
 
-  it('decodeContact with a normal outPathLen still decodes correctly', () => {
+  it('decodeContact reads a 2-byte-mode path by hops × hashSize (0x41 → 2 bytes)', () => {
     const frame = Buffer.alloc(148);
     frame[0] = 0x03;
     Buffer.alloc(32, 0x55).copy(frame, 1);
     frame[33] = 1;
     frame[34] = 0;
-    frame[35] = 3; // normal 3-byte path
+    frame[35] = 0x41; // packed: hashSize=2, hop count=1 → 2 path bytes
+    frame.fill(0xcc, 36, 100); // garbage past the real 2 path bytes
+    Buffer.from([0xa1, 0xb2]).copy(frame, 36);
+    const c = decodeContact(frame);
+    expect(c?.outPathLen).toBe(0x41);
+    expect(c?.outPathHex).toBe('a1b2'); // exactly 2 bytes, not 65 clamped to 64
+  });
+
+  it('decodeContact reads a 3-hop 2-byte-mode path (0x43 → 6 bytes)', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x66).copy(frame, 1);
+    frame[33] = 1;
+    frame[34] = 0;
+    frame[35] = 0x43; // packed: hashSize=2, hop count=3 → 6 path bytes
+    frame.fill(0xcc, 36, 100);
+    Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]).copy(frame, 36);
+    const c = decodeContact(frame);
+    expect(c?.outPathLen).toBe(0x43);
+    expect(c?.outPathHex).toBe('010203040506');
+  });
+
+  it('decodeContact clamps a path that overflows the 64-byte region', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x77).copy(frame, 1);
+    frame[33] = 1;
+    frame[34] = 0;
+    frame[35] = 0x7f; // hashSize=2, hop count=63 → 126 path bytes, past frame[99]
+    frame.fill(0xcc, 36, 100); // 64 bytes available
+    const c = decodeContact(frame);
+    expect(c?.outPathHex).toBe('cc'.repeat(64)); // clamped to the 64-byte region
+  });
+
+  it('decodeContact with a normal 1-byte-mode outPathLen still decodes correctly', () => {
+    const frame = Buffer.alloc(148);
+    frame[0] = 0x03;
+    Buffer.alloc(32, 0x55).copy(frame, 1);
+    frame[33] = 1;
+    frame[34] = 0;
+    frame[35] = 3; // 1-byte mode, 3 hops → 3 path bytes
     Buffer.from([0x01, 0x02, 0x03]).copy(frame, 36);
     const c = decodeContact(frame);
     expect(c?.outPathLen).toBe(3);

@@ -26,13 +26,22 @@ export interface DiscoveredContact {
   favourite: boolean;
 }
 
-/** Hops away, derived from a contact's stored out_path length. MeshCore stores
- *  the routing path as one 1-byte hash per hop (firmware PATH_HASH_SIZE = 1 in
- *  src/MeshCore.h), so the byte length IS the hop count — do NOT divide by the
- *  on-air path-hash mode. 0xFF (OUT_PATH_UNKNOWN) means no path established yet
- *  → unknown / flood. 0 = direct (zero hops). */
+/** Hops away, derived from a contact's stored out_path_len. This is the packed
+ *  MeshCore path-length byte, NOT a raw byte count: bits 5-0 hold the hop count
+ *  and bits 7-6 hold hashSize-1 (see firmware Packet::setPathHashSizeAndCount /
+ *  getPathByteLen). The real path occupies hops × hashSize bytes. So a direct
+ *  2-byte-mode contact stores 0x40 (hop count 0, hashSize 2) — its hop count is
+ *  0, not 64. 0xFF (OUT_PATH_UNKNOWN) means no path established yet → flood. */
 export function hopsFromOutPathLen(outPathLen: number): number | undefined {
-  return outPathLen === 0xff ? undefined : outPathLen;
+  return outPathLen === 0xff ? undefined : outPathLen & 0x3f;
+}
+
+/** Bytes-per-hop for a contact's stored path, derived from the same packed
+ *  out_path_len byte (bits 7-6 + 1). Lets consumers split a learned out_path
+ *  into hops using the contact's OWN hash size rather than assuming the radio's
+ *  current path-hash mode. 0xFF (OUT_PATH_UNKNOWN) → undefined (no path). */
+export function hashSizeFromOutPathLen(outPathLen: number): PathHashSize | undefined {
+  return outPathLen === 0xff ? undefined : (((outPathLen >> 6) + 1) as PathHashSize);
 }
 
 /** Map a MeshCore ADV_TYPE byte (1 chat, 2 repeater, 3 room, 4 sensor) to the

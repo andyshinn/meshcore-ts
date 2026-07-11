@@ -11,7 +11,6 @@ import type {
   MessagePath,
   MessageState,
   Owner,
-  PathHashSize,
   RadioSettings,
   TelemetryPolicy,
 } from '../types';
@@ -150,8 +149,8 @@ export class SessionState {
 
   // ----- Discovered pool (delegates to the DiscoveredStore) -----
 
-  listDiscovered(hashSize: PathHashSize): DiscoveredContact[] {
-    return this.discovered.list(hashSize);
+  listDiscovered(): DiscoveredContact[] {
+    return this.discovered.list();
   }
   getDiscovered(pubkey: string): DiscoveredRow | null {
     return this.discovered.get(pubkey);

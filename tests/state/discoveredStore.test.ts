@@ -87,28 +87,42 @@ describe('DiscoveredStore.list', () => {
       nowMs: 3,
       heardLive: true,
     });
-    const list = store.list(2);
+    const list = store.list();
     expect(list.map((c) => c.publicKeyHex)).toEqual(['bb'.repeat(32), 'cc'.repeat(32), 'aa'.repeat(32)]);
   });
 
-  it('projects path / gps / kind fields and never carries a blocked field', () => {
+  it('derives hops + hashSize from the packed out_path_len, not the radio mode', () => {
     const store = new DiscoveredStore();
-    store.upsert(record({ type: 2, outPathLen: 2, outPathHex: 'abcd', gpsLat: 1.5, gpsLon: 2.5 }), {
+    // 0x42 = hashSize 2, hop count 2 → a 4-byte (2 × 2) learned path.
+    store.upsert(record({ type: 2, outPathLen: 0x42, outPathHex: 'aabbccdd', gpsLat: 1.5, gpsLon: 2.5 }), {
       onRadio: true,
       nowMs: 5000,
       heardLive: true,
     });
-    const [c] = store.list(2);
+    const [c] = store.list();
     expect(c.key).toBe(`c:${'aa'.repeat(32)}`);
     expect(c.kind).toBe('repeater');
     expect(c.hops).toBe(2);
-    expect(c.outPathHex).toBe('abcd');
+    expect(c.outPathHex).toBe('aabbccdd');
     expect(c.outPathHashSize).toBe(2);
     expect(c.gpsLat).toBe(1.5);
     expect(c.gpsLon).toBe(2.5);
     expect(c.onRadio).toBe(true);
     expect(c.lastAdvertMs).toBe(1_000_000);
     expect('blocked' in c).toBe(false);
+  });
+
+  it('treats a direct 2-byte contact (0x40) as 0 hops with no path, not "64 hops"', () => {
+    const store = new DiscoveredStore();
+    store.upsert(record({ outPathLen: 0x40, outPathHex: '' }), {
+      onRadio: true,
+      nowMs: 5000,
+      heardLive: true,
+    });
+    const [c] = store.list();
+    expect(c.hops).toBe(0);
+    expect(c.outPathHex).toBeUndefined();
+    expect(c.outPathHashSize).toBeUndefined();
   });
 
   it('treats out_path_len 0xff as no path (undefined hops/outPath) and 0/0 gps as no fix', () => {
@@ -118,7 +132,7 @@ describe('DiscoveredStore.list', () => {
       nowMs: 5000,
       heardLive: true,
     });
-    const [c] = store.list(2);
+    const [c] = store.list();
     expect(c.hops).toBeUndefined();
     expect(c.outPathHex).toBeUndefined();
     expect(c.outPathHashSize).toBeUndefined();
