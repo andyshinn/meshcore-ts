@@ -47,6 +47,7 @@ export default defineConfig({
             { label: 'Decoding packets', slug: 'guides/decoding-packets' },
           ],
         },
+        { label: 'Changelog', slug: 'changelog' },
         typeDocSidebarGroup,
       ],
     }),

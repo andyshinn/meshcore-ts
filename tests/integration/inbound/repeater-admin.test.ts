@@ -92,7 +92,7 @@ describe('repeater administration', () => {
 
     const p = session.repeaterLogin(`c:${PK}`, 'pw');
     await tick();
-    expect(transport.sent[0][0]).toBe(0x39); // CMD_SEND_ANON_REQ (mesh login)
+    expect(transport.sent[0][0]).toBe(0x1a); // CMD_SEND_LOGIN (radio floods when out_path unknown)
     deliver(transport, loginSuccess(PREFIX));
     const result = await p;
 

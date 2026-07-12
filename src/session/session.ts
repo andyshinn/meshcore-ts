@@ -1505,8 +1505,10 @@ export class MeshCoreSession {
     return repeaterAdmin.sendTelemetryReq(this.ctx, contactKey);
   }
 
-  /** Login to a repeater. Returns the effective mode so the UI can label the
-   *  toast (Direct / Flood / N-hop). */
+  /** Login to a repeater via CMD_SEND_LOGIN — the radio routes it (direct when
+   *  the contact's out_path is known, flood otherwise). An empty `password` is a
+   *  guest login. Returns the effective mode so the UI can label the toast
+   *  (Direct / Flood / N-hop). */
   async repeaterLogin(
     contactKey: string,
     password: string,

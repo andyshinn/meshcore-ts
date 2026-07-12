@@ -1,7 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import {
-  buildAnonLogin,
   buildGetStats,
   buildLogout,
   buildSendAnonReq,
@@ -45,14 +44,13 @@ describe('repeater encoders: 32-byte-pubkey commands', () => {
     expect(hex(buildSendLogin(pk, 'pw'))).toBe(`1a${pk}7077`);
   });
 
+  it('buildSendLogin with an empty (guest) password is [0x1a][32B pubkey] with no password bytes', () => {
+    expect(hex(buildSendLogin(pk, ''))).toBe(`1a${pk}`);
+  });
+
   it('buildSendAnonReq is [0x39][32B pubkey][data]; rejects empty data', () => {
     expect(hex(buildSendAnonReq(pk, Buffer.from([0x01])))).toBe(`39${pk}01`);
     expect(() => buildSendAnonReq(pk, Buffer.alloc(0))).toThrow(/≥1 byte/);
-  });
-
-  it('buildAnonLogin wraps the password as anon-req data; rejects empty', () => {
-    expect(hex(buildAnonLogin(pk, 'pw'))).toBe(`39${pk}7077`);
-    expect(() => buildAnonLogin(pk, '')).toThrow(/empty/);
   });
 
   it('buildSendBinaryReq is [0x32][32B pubkey][reqData]; rejects empty', () => {

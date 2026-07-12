@@ -366,16 +366,6 @@ export function buildSendAnonReq(destPublicKeyHex: string, data: Buffer): Buffer
   return out;
 }
 
-// Convenience: send an anonymous *password login* to a remote repeater we have
-// not yet been admitted to. Body is just the ASCII password (sub-type byte
-// happens to be the first password char or 0). Firmware reads data[0] and
-// branches on `>= 0x20` (ASCII) for handleLoginReq.
-export function buildAnonLogin(destPublicKeyHex: string, password: string): Buffer {
-  const body = Buffer.from(password, 'utf8');
-  if (body.length === 0) throw new Error('password must not be empty');
-  return buildSendAnonReq(destPublicKeyHex, body);
-}
-
 // CMD_SEND_TRACE_PATH: [0x24][tag u32 LE][auth u32 LE][flags u8][path bytes...]
 // Firmware checks `len > 10`, so we always emit ≥1 path byte. flags bits 0..1
 // encode the per-hop hash size (path length must be multiple of 1<<size).

@@ -5,7 +5,6 @@ import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../pr
 import {
   type AclEntry,
   type AvgMinMaxResult,
-  buildAnonLogin,
   buildGetStats,
   buildLogout,
   buildSendAnonReq,
@@ -360,14 +359,15 @@ function emitTelemetryFromBinary(ctx: FeatureContext, contactKey: string, lpp: B
   ctx.log.debug(`telemetry (binary) from "${contactKey}" payload=${lpp.length}B fields=${fields.length}`);
 }
 
-/** Login to a repeater. The wire mode is derived from the contact's current
- *  path state:
- *    - `preferDirect=true` → CMD_SEND_LOGIN (companion-side, no mesh routing)
- *    - else → CMD_SEND_ANON_REQ (mesh-routed; the radio uses whatever
- *      out_path the contact currently has — N-hop if set, flood otherwise)
- *  Success arrives later as PUSH_LOGIN_SUCCESS keyed on the recipient's
- *  pubkey prefix; failure as PUSH_LOGIN_FAIL. Returns the effective mode so
- *  the UI can label the toast (Direct / Flood / N-hop). */
+/** Login to a repeater. Always dispatched via CMD_SEND_LOGIN (0x1a): the radio
+ *  routes it for us — DIRECT when the contact's `out_path` is known, FLOOD when
+ *  it isn't — so the one opcode covers Direct / Flood / N-hop. An empty
+ *  `password` is a GUEST login (the flooded reply installs the out_path and adds
+ *  us to the repeater's ACL). Success arrives later as PUSH_LOGIN_SUCCESS keyed
+ *  on the recipient's pubkey prefix; failure as PUSH_LOGIN_FAIL.
+ *
+ *  `mode`/`effective` are UI labels derived from the contact's current path
+ *  state (Direct / Flood / N-hop), not a second dispatch decision. */
 export async function repeaterLogin(
   ctx: FeatureContext,
   contactKey: string,
@@ -383,7 +383,7 @@ export async function repeaterLogin(
 
   const prefix = lookup.publicKeyHex.slice(0, 12);
   const wait = ctx.admin.awaitLogin<LoginSuccess>(prefix, ADMIN_REPLY_TIMEOUT_MS);
-  const frame = preferDirect ? buildSendLogin(lookup.publicKeyHex, password) : buildAnonLogin(lookup.publicKeyHex, password);
+  const frame = buildSendLogin(lookup.publicKeyHex, password);
   try {
     await ctx.writeFrame(frame);
   } catch (err) {

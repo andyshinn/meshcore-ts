@@ -171,20 +171,40 @@ describe('repeaterAdmin: login round-trip', () => {
     expect(session?.firmwareVerLevel).toBe(7);
   });
 
-  it('uses anon (mesh) login + flood effective when not preferDirect and no path', async () => {
+  it('uses CMD_SEND_LOGIN (0x1a) for a mesh login + flood effective when not preferDirect and no path', async () => {
     const { ctx, state, writes } = makeCtx();
     addContact(state);
 
     const p = repeaterLogin(ctx, `c:${PK}`, 'pw');
-    // CMD_SEND_ANON_REQ (not CMD_SEND_LOGIN) is written.
+    // CMD_SEND_LOGIN (0x1a) — the radio floods when out_path is unknown. Body is
+    // [0x1a][32B pubkey][ascii password].
     expect(writes).toHaveLength(1);
-    expect(writes[0][0]).not.toBe(0x1a);
-    expect(writes[0][0]).toBe(0x39); // CMD_SEND_ANON_REQ
+    expect(writes[0][0]).toBe(0x1a);
+    expect(writes[0].subarray(1, 33).toString('hex')).toBe(PK);
+    expect(writes[0].subarray(33).toString('utf8')).toBe('pw');
 
     repeaterAdminFeature.handle(PUSH.LOGIN_SUCCESS, loginSuccessFrame(PREFIX, 0, 0, 0), ctx);
     const result = await p;
     expect(result.mode).toBe('remote');
     expect(result.effective).toBe('flood');
+  });
+
+  it('guest login (empty password) writes [0x1a][32B pubkey] with no password bytes and resolves as guest', async () => {
+    const { ctx, state, admin, writes } = makeCtx();
+    addContact(state);
+
+    const p = repeaterLogin(ctx, `c:${PK}`, '');
+    // Guest bootstrap: CMD_SEND_LOGIN with an empty password → no trailing bytes.
+    expect(writes).toHaveLength(1);
+    expect(writes[0][0]).toBe(0x1a);
+    expect(writes[0].subarray(1, 33).toString('hex')).toBe(PK);
+    expect(writes[0]).toHaveLength(1 + 32);
+
+    // Repeater admits the guest: perms=0, acl=PERM_ACL_GUEST(0) → not admin.
+    repeaterAdminFeature.handle(PUSH.LOGIN_SUCCESS, loginSuccessFrame(PREFIX, 0, 0, 0), ctx);
+    const result = await p;
+    expect(result.isAdmin).toBe(false);
+    expect(admin.getSession(`c:${PK}`)?.role).toBe('guest');
   });
 
   it('reports effective=path when the contact has a known out_path', async () => {
