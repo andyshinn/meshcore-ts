@@ -207,13 +207,33 @@ describe('repeaterAdmin: login round-trip', () => {
     expect(admin.getSession(`c:${PK}`)?.role).toBe('guest');
   });
 
-  it('reports effective=path when the contact has a known out_path', async () => {
+  it('reports effective=path when the contact has a known multi-hop out_path', async () => {
     const { ctx, state } = makeCtx();
-    addContact(state, { outPathHex: '0102' });
+    addContact(state, { outPathHex: '0102', hops: 2 });
     const p = repeaterLogin(ctx, `c:${PK}`, 'pw');
     repeaterAdminFeature.handle(PUSH.LOGIN_SUCCESS, loginSuccessFrame(PREFIX, 0, 0, 0), ctx);
     const result = await p;
     expect(result.effective).toBe('path');
+  });
+
+  it('reports effective=direct for a known 0-hop route (hops === 0)', async () => {
+    // A known route with 0 hops is a direct neighbour, not a flood (matches
+    // meshcore_py, where out_path_len 0 is direct and only -1/0xFF is flood).
+    const { ctx, state } = makeCtx();
+    addContact(state, { hops: 0 });
+    const p = repeaterLogin(ctx, `c:${PK}`, 'pw');
+    repeaterAdminFeature.handle(PUSH.LOGIN_SUCCESS, loginSuccessFrame(PREFIX, 0, 0, 0), ctx);
+    const result = await p;
+    expect(result.effective).toBe('direct');
+  });
+
+  it('reports effective=flood only when the out_path is unknown (hops === undefined)', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state, { hops: undefined });
+    const p = repeaterLogin(ctx, `c:${PK}`, 'pw');
+    repeaterAdminFeature.handle(PUSH.LOGIN_SUCCESS, loginSuccessFrame(PREFIX, 0, 0, 0), ctx);
+    const result = await p;
+    expect(result.effective).toBe('flood');
   });
 
   it('PUSH_LOGIN_FAIL rejects the login awaiter', async () => {
