@@ -6,6 +6,9 @@ coverage/
 .env
 .env.local
 
+# Claude Code git worktrees (machine-local; never committed)
+.claude/worktrees/
+
 # docs site (Astro/Starlight)
 docs/.astro/
 docs/dist/
