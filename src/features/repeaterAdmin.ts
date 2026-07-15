@@ -360,11 +360,13 @@ function emitTelemetryFromBinary(ctx: FeatureContext, contactKey: string, lpp: B
 }
 
 /** Login to a repeater. Always dispatched via CMD_SEND_LOGIN (0x1a): the radio
- *  routes it for us — DIRECT when the contact's `out_path` is known, FLOOD when
- *  it isn't — so the one opcode covers Direct / Flood / N-hop. An empty
- *  `password` is a GUEST login (the flooded reply installs the out_path and adds
- *  us to the repeater's ACL). Success arrives later as PUSH_LOGIN_SUCCESS keyed
- *  on the recipient's pubkey prefix; failure as PUSH_LOGIN_FAIL.
+ *  routes it for us — DIRECT when the contact has a known route (including a
+ *  known 0-hop route to a direct neighbour), FLOOD only when the `out_path` is
+ *  unknown (out_path_len 0xFF) — so the one opcode covers Direct / Flood /
+ *  N-hop. An empty `password` is a GUEST login (the flooded reply installs the
+ *  out_path and adds us to the repeater's ACL). Success arrives later as
+ *  PUSH_LOGIN_SUCCESS keyed on the recipient's pubkey prefix; failure as
+ *  PUSH_LOGIN_FAIL.
  *
  *  `mode`/`effective` are UI labels derived from the contact's current path
  *  state (Direct / Flood / N-hop), not a second dispatch decision. */
@@ -377,9 +379,18 @@ export async function repeaterLogin(
   if (!lookup.ok) throw new Error(lookup.error);
   const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
   const preferDirect = contact?.preferDirect === true;
-  const hasPath = !!contact?.outPathHex && contact.outPathHex.length > 0;
   const mode: AdminMode = preferDirect ? 'local' : 'remote';
-  const effective: RepeaterReachMode = preferDirect ? 'direct' : hasPath ? 'path' : 'flood';
+  // `contact.hops` is hopsFromOutPathLen(out_path_len): undefined for flood
+  // (out_path_len 0xFF, meshcore_py's -1), 0 for a direct neighbour, >=1 for a
+  // routed path. A known 0-hop route is DIRECT, not flood — flood is only the
+  // unknown path.
+  const effective: RepeaterReachMode = preferDirect
+    ? 'direct'
+    : contact?.hops === undefined
+      ? 'flood' // out_path_len 0xFF == py's -1
+      : contact.hops === 0
+        ? 'direct' // known 0-hop route = direct
+        : 'path';
 
   const prefix = lookup.publicKeyHex.slice(0, 12);
   const wait = ctx.admin.awaitLogin<LoginSuccess>(prefix, ADMIN_REPLY_TIMEOUT_MS);
