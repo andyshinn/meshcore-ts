@@ -139,7 +139,19 @@ export interface MessageHop {
  *  the same packet arrived via multiple flood routes (merged on receipt by
  *  deterministic id). `hashMode` is the firmware-encoded per-hop hash byte
  *  count (1, 2, or 3 — 4 is reserved). `finalSnr` is the SNR our radio
- *  measured on the LAST hop only; per-hop SNR is never available on flood. */
+ *  measured on the LAST hop only; per-hop SNR is never available on flood.
+ *
+ *  `hops` is NOT the radio hop count: the on-air path carries only the
+ *  relaying repeaters (neither endpoint writes itself into it), and `buildPath`
+ *  brackets those with a synthesized `origin` and `sink`, so
+ *  `hops.length === onAirHopCount + 2`. Count `kind === 'hop'` entries for the
+ *  radio hop count.
+ *
+ *  Origin and sink can be the SAME node — us. A path attributed to one of our
+ *  own outgoing channel sends (PendingChannelSends, from a repeater rebroadcast
+ *  our radio overheard) really did leave us and come back, so it renders
+ *  me → repeater(s) → me. Such a path describes who repeated us, not a route to
+ *  a peer; the `sink` is our radio overhearing itself, not a destination. */
 export interface MessagePath {
   id: string;
   hops: MessageHop[];

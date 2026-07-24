@@ -12,6 +12,19 @@ export function channelHashOf(channel: Channel): number | null {
   return createHash('sha256').update(secret).digest()[0];
 }
 
+/** Build the display path for one flood reception: a synthesized `origin`, one
+ *  `hop` per on-air path hash, and a synthesized `sink` (our radio).
+ *
+ *  `pathHex` holds only the repeaters that relayed the packet — the firmware
+ *  appends one hash per forward, and neither endpoint writes itself in — so the
+ *  two endpoints here exist only for rendering and `hops.length` runs two above
+ *  the radio hop count. See MessagePath in ./types.
+ *
+ *  `senderName` may equal `ownerName`: PendingChannelSends calls this for a
+ *  repeater rebroadcast of our OWN send that our radio overheard, which is
+ *  genuinely a me → repeater(s) → me round trip. Both endpoints then derive the
+ *  same `shortId` from the owner name, so renderers must key on array position
+ *  or `kind`, not `shortId`, or they'll collapse the two ends into one node. */
 export function buildPath(
   pathHex: string,
   hashSize: number,
