@@ -4,6 +4,8 @@ import type { ContactRecord, ContactSource } from '../model/contactTypes';
 import type {
   AutoAddConfig,
   Channel,
+  CliSendStateEvent,
+  CliUnmatchedEvent,
   Contact,
   ContactKind,
   DeviceCapabilities,
@@ -61,6 +63,13 @@ export interface MeshCoreEventMap {
    *  only the message id and the observed path — the library does not track
    *  message state for this; the consumer owns it. */
   messagePathHeard: (p: { id: string; path: MessagePath }) => void;
+  /** Wire-level progress of a repeater CLI send. CLI sends never appear on
+   *  {@link MeshCoreEventMap.messageState} — that channel carries only real
+   *  outbound DMs. */
+  cliSendState: (e: CliSendStateEvent) => void;
+  /** A CLI reply that matched no pending awaiter — a late answer to a
+   *  timed-out or cancelled command, or unsolicited repeater output. */
+  cliUnmatched: (e: CliUnmatchedEvent) => void;
   owner: (owner: Owner | null) => void;
   radioSettings: (settings: RadioSettings) => void;
   repeaterStatus: (snap: RepeaterStatusSnapshot) => void;
@@ -95,6 +104,8 @@ export const EventName = {
   MESSAGE_UPSERTED: 'messageUpserted',
   MESSAGE_STATE: 'messageState',
   MESSAGE_PATH_HEARD: 'messagePathHeard',
+  CLI_SEND_STATE: 'cliSendState',
+  CLI_UNMATCHED: 'cliUnmatched',
   OWNER: 'owner',
   RADIO_SETTINGS: 'radioSettings',
   REPEATER_STATUS: 'repeaterStatus',

@@ -43,6 +43,11 @@ describe('public surface — top-level', () => {
     expect(pkg.Models.ADMIN_REPLY_TIMEOUT_MS).toBe(20_000);
   });
 
+  it('registers the CLI event names', () => {
+    expect(pkg.Ports.EventName.CLI_SEND_STATE).toBe('cliSendState');
+    expect(pkg.Ports.EventName.CLI_UNMATCHED).toBe('cliUnmatched');
+  });
+
   it('Features is a type-only namespace (compile-time reachable)', () => {
     const _check: import('../src/index').Features.SelfInfo | undefined = undefined;
     expect(_check).toBeUndefined();

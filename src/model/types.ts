@@ -374,3 +374,33 @@ export interface PathLearnedEvent {
   /** Wall-clock ms of the learn event. */
   learnedAt: number;
 }
+
+/** Wire progress a repeater CLI send can report. Narrower than
+ *  {@link MessageState}: a CLI send is never 'sending', 'heard' or 'received'. */
+export type CliSendPhase = 'sent' | 'ack' | 'failed';
+
+/** Wire-level progress of an outgoing repeater CLI command. CLI sends occupy a
+ *  DM send-FIFO slot (the radio's RESP_SENT/ACK bookkeeping doesn't distinguish
+ *  them) but they are not messages — they report here rather than on
+ *  `messageState`, so a consumer never mistakes one for a real outbound DM. */
+export interface CliSendStateEvent {
+  /** Synthetic `cli-<base36>-<rand>` id the library assigned to this send. */
+  id: string;
+  /** Contact the command was addressed to. */
+  contactKey: string;
+  state: CliSendPhase;
+}
+
+/** A CLI reply (txt_type CLI_DATA) that matched no pending awaiter — a late
+ *  answer to a timed-out or cancelled command, or unsolicited repeater output.
+ *  These are never inserted into the message store. */
+export interface CliUnmatchedEvent {
+  /** Set when the sender prefix matches a known contact; absent otherwise. No
+   *  placeholder contact is synthesised for CLI traffic. */
+  contactKey?: string;
+  /** 6-byte sender public-key prefix, lowercase hex. */
+  senderPrefixHex: string;
+  body: string;
+  /** Wall-clock ms at which the reply was decoded. */
+  receivedAt: number;
+}
