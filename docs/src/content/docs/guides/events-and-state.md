@@ -34,12 +34,54 @@ transport.setState('connected');
 `transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`,
 `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`,
 `contactObserved`, `messages`, `messageUpserted`, `messageState`,
-`messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`,
-`repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`,
-`telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
+`messagePathHeard`, `cliSendState`, `cliUnmatched`, `owner`, `radioSettings`,
+`repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`,
+`autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`,
+`deviceCapabilities`.
 
 All payloads are exported types — see `Ports.EventMap` in the
 [API reference](../../api/readme/).
+
+## CLI sends are not DMs
+
+A repeater CLI command (`repeaterSendCli`) travels as a direct message on the
+wire, so it takes a slot in the same send queue a DM does. It is not a message
+though, and it never appears on `messageState` — its wire progress reports on
+`cliSendState` instead:
+
+```ts
+session.events.on('cliSendState', ({ id, contactKey, state }) => {
+  // state: 'sent' (radio transmitted) | 'ack' (repeater received) | 'failed'
+});
+```
+
+A CLI reply that matches no outstanding command — a late answer to one that
+timed out or was cancelled, or unsolicited repeater output — is never inserted
+into the message store. It surfaces on `cliUnmatched`:
+
+```ts
+session.events.on('cliUnmatched', ({ contactKey, body }) => {
+  // contactKey is undefined when the sender prefix matches no known contact
+});
+```
+
+Commands that never answer — `reboot`, `poweroff`, `clkreboot`, `start ota` —
+should be sent with `expectReply: false`, which resolves as soon as the radio
+confirms the send rather than waiting out the full reply timeout:
+
+```ts
+import { Models } from '@andyshinn/meshcore-ts';
+
+await session.repeaterSendCli(key, 'reboot', { expectReply: false });
+
+// Bound or cancel a command that does expect an answer. The defaults are
+// Models.CLI_REPLY_TIMEOUT_MS and Models.ADMIN_SENT_TIMEOUT_MS.
+const ac = new AbortController();
+const reply = session.repeaterSendCli(key, 'ver', {
+  timeoutMs: Models.CLI_REPLY_TIMEOUT_MS,
+  signal: ac.signal,
+});
+```
 
 There is intentionally no generic `error` event. Specific recoverable
 conditions get their own dedicated event instead — for example `contactsFull`
