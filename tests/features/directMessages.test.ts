@@ -626,3 +626,81 @@ describe('directMessages: CLI sends report on cliSendState, not messageState', (
     expect(ctx.rt.dm.cliSends.size).toBe(0);
   });
 });
+
+describe('directMessages: unmatched CLI replies', () => {
+  // RESP_CONTACT_MSG_RECV_V3 with txt_type=CLI_DATA.
+  function cliReplyFrame(senderPrefixHex: string, body: string): Buffer {
+    const text = Buffer.from(body, 'utf8');
+    const frame = Buffer.alloc(16 + text.length);
+    frame[0] = 0x10;
+    Buffer.from(senderPrefixHex, 'hex').copy(frame, 4);
+    frame[10] = 0xff;
+    frame[11] = TXT_TYPE.CLI_DATA;
+    frame.writeUInt32LE(1, 12);
+    text.copy(frame, 16);
+    return frame;
+  }
+
+  it('emits cliUnmatched with the contactKey and stores no message', () => {
+    const { ctx, state, events } = makeCtx();
+    addContact(state);
+    const seen: unknown[] = [];
+    events.on('cliUnmatched', (e) => seen.push(e));
+
+    directMessagesFeature.handle(0x10, cliReplyFrame('aabbccddeeff', 'OK'), ctx);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      contactKey: `c:${PK}`,
+      senderPrefixHex: 'aabbccddeeff',
+      body: 'OK',
+    });
+    expect(state.getMessagesForKey(`c:${PK}`)).toHaveLength(0);
+  });
+
+  it('omits contactKey and creates no placeholder contact for an unknown sender', () => {
+    const { ctx, state, events } = makeCtx();
+    const seen: Array<{ contactKey?: string }> = [];
+    events.on('cliUnmatched', (e) => seen.push(e));
+
+    directMessagesFeature.handle(0x10, cliReplyFrame('010203040506', 'late'), ctx);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].contactKey).toBeUndefined();
+    expect(state.getContacts()).toHaveLength(0);
+  });
+
+  it('still routes to a pending awaiter when one is registered', () => {
+    const { ctx, state, events } = makeCtx();
+    addContact(state);
+    const seen: unknown[] = [];
+    events.on('cliUnmatched', (e) => seen.push(e));
+    let claimed: string | null = null;
+    setAdminHooks(ctx, {
+      onCliReply: (_prefix, body) => {
+        claimed = body;
+        return true;
+      },
+    });
+
+    directMessagesFeature.handle(0x10, cliReplyFrame('aabbccddeeff', 'PERM SET'), ctx);
+
+    expect(claimed).toBe('PERM SET');
+    expect(seen).toHaveLength(0);
+    expect(state.getMessagesForKey(`c:${PK}`)).toHaveLength(0);
+  });
+
+  it('leaves a plain (non-CLI) DM on the normal message path', () => {
+    const { ctx, state, events } = makeCtx();
+    addContact(state);
+    const seen: unknown[] = [];
+    events.on('cliUnmatched', (e) => seen.push(e));
+    const frame = cliReplyFrame('aabbccddeeff', 'hello');
+    frame[11] = TXT_TYPE.PLAIN;
+
+    directMessagesFeature.handle(0x10, frame, ctx);
+
+    expect(seen).toHaveLength(0);
+    expect(state.getMessagesForKey(`c:${PK}`)).toHaveLength(1);
+  });
+});

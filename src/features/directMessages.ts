@@ -400,13 +400,27 @@ export function resetDmState(ctx: FeatureContext, reason: string): void {
 function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): void {
   const parsed = code === RESP.CONTACT_MSG_RECV_V3 ? decodeContactMsgV3(frame) : decodeContactMsgV1(frame);
   if (!parsed) return;
-  // CLI replies arrive on the same opcode as DMs; route them to the matching
-  // admin awaiter and don't insert them into the message store.
+  // CLI replies arrive on the same opcode as DMs. Route them to the matching
+  // admin awaiter; an unmatched one (late answer to a timed-out or cancelled
+  // command, or unsolicited output) surfaces on its own channel. Either way a
+  // CLI reply never enters the message store.
   if (parsed.txtType === TXT_TYPE.CLI_DATA) {
-    if (ctx.rt.dm.adminHooks.onCliReply?.(parsed.senderPubKeyPrefixHex.toLowerCase(), parsed.body)) {
-      if (drain.isDraining(ctx)) drain.pumpAfterRecv(ctx);
-      return;
+    const senderPrefixHex = parsed.senderPubKeyPrefixHex.toLowerCase();
+    if (!ctx.rt.dm.adminHooks.onCliReply?.(senderPrefixHex, parsed.body)) {
+      const known = ctx.state.getContacts().find((c) => c.publicKeyHex.toLowerCase().startsWith(senderPrefixHex));
+      ctx.events.emit('cliUnmatched', {
+        contactKey: known?.key,
+        senderPrefixHex,
+        body: parsed.body,
+        receivedAt: Date.now(),
+      });
+      ctx.log.debug(`unmatched cli reply from=${senderPrefixHex} body=${JSON.stringify(parsed.body.slice(0, 60))}`);
     }
+    // The radio only tickles PUSH_MSG_WAITING once per queue event; keep
+    // pulling until NO_MORE_MESSAGES. Must run on BOTH branches — this return
+    // now short-circuits the pump at the end of the function.
+    if (drain.isDraining(ctx)) drain.pumpAfterRecv(ctx);
+    return;
   }
 
   const prefix = parsed.senderPubKeyPrefixHex;
