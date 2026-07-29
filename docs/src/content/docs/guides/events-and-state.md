@@ -42,6 +42,15 @@ transport.setState('connected');
 All payloads are exported types — see `Ports.EventMap` in the
 [API reference](../../api/readme/).
 
+There is intentionally no generic `error` event. Specific recoverable
+conditions get their own dedicated event instead — for example `contactsFull`
+fires when the radio's contact store is full and a new advert could not be
+auto-added. Adapters can bridge such events onto their own error/toast channel.
+
+`rawPacket` carries the raw on-air bytes of each received LoRa packet; pair it
+with `decodeOnAirPacket` to structurally decode them — see
+[Decoding on-air packets](../decoding-packets/).
+
 ## CLI sends are not DMs
 
 A repeater CLI command (`repeaterSendCli`) travels as a direct message on the
@@ -82,15 +91,6 @@ const reply = session.repeaterSendCli(key, 'ver', {
   signal: ac.signal,
 });
 ```
-
-There is intentionally no generic `error` event. Specific recoverable
-conditions get their own dedicated event instead — for example `contactsFull`
-fires when the radio's contact store is full and a new advert could not be
-auto-added. Adapters can bridge such events onto their own error/toast channel.
-
-`rawPacket` carries the raw on-air bytes of each received LoRa packet; pair it
-with `decodeOnAirPacket` to structurally decode them — see
-[Decoding on-air packets](../decoding-packets/).
 
 ## What the session can do
 
