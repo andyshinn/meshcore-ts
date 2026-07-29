@@ -37,6 +37,12 @@ describe('public surface — top-level', () => {
     expect(pkg.Ports.EventName.RAW_PACKET).toBe('rawPacket');
   });
 
+  it('exposes the admin/CLI timeout defaults on Models', () => {
+    expect(pkg.Models.CLI_REPLY_TIMEOUT_MS).toBe(30_000);
+    expect(pkg.Models.ADMIN_SENT_TIMEOUT_MS).toBe(5_000);
+    expect(pkg.Models.ADMIN_REPLY_TIMEOUT_MS).toBe(20_000);
+  });
+
   it('Features is a type-only namespace (compile-time reachable)', () => {
     const _check: import('../src/index').Features.SelfInfo | undefined = undefined;
     expect(_check).toBeUndefined();

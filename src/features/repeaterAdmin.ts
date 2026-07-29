@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { contactKindToAdvType } from '../model/contacts';
+import { ADMIN_REPLY_TIMEOUT_MS, ADMIN_SENT_TIMEOUT_MS, CLI_REPLY_TIMEOUT_MS } from '../model/timeouts';
 import type { Contact } from '../model/types';
 import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
@@ -40,10 +41,6 @@ import type { Feature, FeatureContext } from './feature';
  *  `'direct'` (companion-side CMD_SEND_LOGIN), `'path'` (mesh-routed over a known
  *  out-path) or `'flood'` (mesh-routed, no path). */
 export type RepeaterReachMode = 'direct' | 'flood' | 'path';
-
-const ADMIN_SENT_TIMEOUT_MS = 5_000;
-const ADMIN_REPLY_TIMEOUT_MS = 20_000;
-const CLI_REPLY_TIMEOUT_MS = 30_000;
 
 // ---- Admin-coordination state ------------------------------------------
 

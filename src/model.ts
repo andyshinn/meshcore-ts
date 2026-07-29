@@ -4,4 +4,5 @@
 export * from './model/contacts';
 export * from './model/contactTypes';
 export * from './model/meshObservations';
+export * from './model/timeouts';
 export * from './model/types';
