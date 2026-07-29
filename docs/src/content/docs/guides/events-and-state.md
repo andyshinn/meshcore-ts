@@ -79,18 +79,43 @@ should be sent with `expectReply: false`, which resolves as soon as the radio
 confirms the send rather than waiting out the full reply timeout:
 
 ```ts
+await session.repeaterSendCli(key, 'reboot', { expectReply: false });
+```
+
+Such a send rejects promptly if the radio rejects it or the transport drops,
+carrying that reason — it only waits out its (much shorter) timeout when the
+radio simply never confirms.
+
+Bound or cancel a command that does expect an answer with `timeoutMs` and
+`signal`. The defaults are `Models.CLI_REPLY_TIMEOUT_MS` (waiting for a reply)
+and `Models.ADMIN_SENT_TIMEOUT_MS` (waiting for the send confirmation, with
+`expectReply: false`):
+
+```ts
 import { Models } from '@andyshinn/meshcore-ts';
 
-await session.repeaterSendCli(key, 'reboot', { expectReply: false });
-
-// Bound or cancel a command that does expect an answer. The defaults are
-// Models.CLI_REPLY_TIMEOUT_MS and Models.ADMIN_SENT_TIMEOUT_MS.
 const ac = new AbortController();
-const reply = session.repeaterSendCli(key, 'ver', {
-  timeoutMs: Models.CLI_REPLY_TIMEOUT_MS,
-  signal: ac.signal,
-});
+cancelButton.onclick = () => ac.abort(new Error('user cancelled'));
+
+try {
+  const version = await session.repeaterSendCli(key, 'ver', {
+    timeoutMs: Models.CLI_REPLY_TIMEOUT_MS,
+    signal: ac.signal,
+  });
+  console.log('repeater firmware:', version);
+} catch (err) {
+  // An abort rejects with `signal.reason` verbatim, so the caller can tell a
+  // user hitting Cancel from the console tearing the command down itself
+  // (e.g. `ac.abort(new Error('repeater switched'))`) — and both from a
+  // timeout or a transport failure, which reject with an Error of their own.
+  console.warn('cli command failed:', err);
+}
 ```
+
+Aborting drops the awaiter and frees the one per-repeater CLI slot, so the next
+command can go out immediately. It does **not** recall a command already on the
+air: the repeater may still run it and answer, and that late answer arrives on
+`cliUnmatched`.
 
 ## What the session can do
 

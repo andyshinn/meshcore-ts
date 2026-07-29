@@ -115,7 +115,7 @@ class BleTransport implements Transport {
 
 ## Events
 
-`transportState`, `channels`, `channelPresence`, `syncProgress`, `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `messages`, `messageState`, `messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
+`transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`, `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`, `contactObserved`, `messages`, `messageUpserted`, `messageState`, `messagePathHeard`, `cliSendState`, `cliUnmatched`, `owner`, `radioSettings`, `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
 
 All payloads are exported types (see `MeshCoreEventMap`).
 

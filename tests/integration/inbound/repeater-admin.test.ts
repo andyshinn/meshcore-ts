@@ -246,7 +246,8 @@ describe('repeater administration', () => {
     ac.abort(reason);
     await expect(p).rejects.toBe(reason);
 
-    // The slot is free, so the next command can be issued immediately.
+    // A cancel does not poison the session: a follow-up command still registers
+    // and still gets its own reply routed to it.
     const next = session.repeaterSendCli(`c:${PK}`, 'time', { timeoutMs: 500 });
     await tick();
     deliver(transport, cliReply(PREFIX, '1700000000'));

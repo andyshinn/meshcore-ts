@@ -2,7 +2,7 @@
 // can render an accurate countdown or size its own queue without hardcoding
 // values that belong to the library.
 
-/** Default wait for a repeater's CLI reply ({@link repeaterSendCli}). */
+/** Default wait for a repeater's CLI reply (`repeaterSendCli`). */
 export const CLI_REPLY_TIMEOUT_MS = 30_000;
 
 /** Default wait for the radio's RESP_SENT echo after an admin write. Also the
