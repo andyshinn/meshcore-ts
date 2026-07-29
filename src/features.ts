@@ -8,6 +8,6 @@ export type { ContactsSyncSignal, Feature, FeatureContext } from './features/fea
 export type { DefaultFloodScope, FloodScopeInput } from './features/floodScope';
 export type { RepeatFreqRange } from './features/misc';
 export type { AdvertPath, DiscoveredPath } from './features/pathDiagnostics';
-export type { RepeaterReachMode } from './features/repeaterAdmin';
+export type { RepeaterCliOptions, RepeaterReachMode } from './features/repeaterAdmin';
 export type { SelfInfo } from './features/selfInfo';
 export type { TuningParams } from './features/tuning';

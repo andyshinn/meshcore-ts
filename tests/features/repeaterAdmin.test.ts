@@ -4,7 +4,7 @@ import { AdminSessionStore } from '../../src/features/adminSessions';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
 import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
-import { createDmRuntime, directMessagesFeature } from '../../src/features/directMessages';
+import { createDmRuntime, directMessagesFeature, resetDmState } from '../../src/features/directMessages';
 import { createDrainRuntime } from '../../src/features/drain';
 import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
@@ -561,5 +561,89 @@ describe('repeaterAdmin: repeaterRequestAvgMinMax', () => {
     const res = await p;
     expect(res.nowUnix).toBe(42);
     expect(res.series[0]).toMatchObject({ channel: 1, name: 'Temperature', min: 20, max: 25.5, avg: 22.5 });
+  });
+});
+
+describe('repeaterAdmin: repeaterSendCli options — timeout + abort', () => {
+  it('honours a per-call timeoutMs and clears the pendingCli slot', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/timed out after 10ms/);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+  });
+
+  it('leaves the DM FIFO entry in place after a timeout', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/timed out/);
+    // A RESP_SENT may still be in flight; popping the entry here would
+    // mis-attribute the next real DM's 'sent' event.
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('rejects immediately on an already-aborted signal, writing nothing', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    ac.abort();
+    await expect(repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal })).rejects.toThrow();
+    expect(writes).toHaveLength(0);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+  });
+
+  it('rejects with signal.reason when aborted after the send', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    const reason = new Error('repeater switched');
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal });
+    await tick();
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+
+    ac.abort(reason);
+
+    await expect(p).rejects.toBe(reason);
+    // Awaiter dropped so the next command can use the slot; FIFO untouched.
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('defaults to a 30s reply wait when no timeoutMs is given', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    await tick();
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+    // Settle it so the 30s timer doesn't hold the suite open.
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
+    await expect(p).resolves.toBe('v1.2.3');
+  });
+
+  it('rejects the promise (not just throws) when the write fails', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    ctx.writeFrame = async () => {
+      throw new Error('transport down');
+    };
+
+    await expect(repeaterSendCli(ctx, `c:${PK}`, 'ver')).rejects.toThrow(/transport down/);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
   });
 });
