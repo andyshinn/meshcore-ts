@@ -17,6 +17,7 @@
 - `dmSendQueue` stays `string[]`. Fourteen existing assertions in `tests/features/directMessages.test.ts` depend on that shape; do not change it to an object array.
 - Timeout and abort **never** pop the DM send FIFO entry. Only a write failure dequeues.
 - Package manager is pnpm. Run tests with `pnpm test`, types with `pnpm typecheck`, lint with `pnpm lint`.
+- This work ships as **0.5.0**. Task 7 bumps `package.json` from `0.4.1`. Publishing still takes its version from the GitHub Release tag (`.github/workflows/ci.yml`); the bump marks intent and keeps `VERSION` honest.
 - Biome sorts imports alphabetically by module path. `../model/timeouts` sorts between `../model/contacts` and `../model/types`.
 - Commit after every task. Do not push.
 
@@ -1232,6 +1233,7 @@ Proves the three features work through the real `MeshCoreSession` surface, and d
 - Modify: `tests/integration/inbound/repeater-admin.test.ts`
 - Modify: `docs/src/content/docs/guides/events-and-state.md:32-42`
 - Modify: `README.md:124`
+- Modify: `package.json:3` (version)
 
 **Interfaces:**
 - Consumes: everything from Tasks 1-6.
@@ -1377,16 +1379,29 @@ In `README.md` line 124, change the repeater-administration clause so `repeaterS
 and repeater administration (`repeaterLogin`, `repeaterSendCli` (with `expectReply` / `timeoutMs` / `signal`), `repeaterRequestAcl`, `repeaterRequestNeighbours`, `repeaterRequestOwnerInfo`, `repeaterTracePath`, `repeaterGetLocalStats`, `sendStatusReq`, `sendTelemetryReq`).
 ```
 
-- [ ] **Step 5: Verify the whole build**
+- [ ] **Step 5: Bump the package version to 0.5.0**
+
+In `package.json`, change line 3:
+
+```json
+  "version": "0.5.0",
+```
+
+Do not run `pnpm version` — it would create a git tag. Edit the file directly.
+`src/index.ts` imports `version` from `package.json` and re-exports it as
+`VERSION`; `tests/smoke.test.ts:7` compares the two, so the bump stays
+self-consistent with no test change needed.
+
+- [ ] **Step 6: Verify the whole build**
 
 Run: `pnpm test && pnpm typecheck && pnpm lint && pnpm build`
 Expected: all PASS. `pnpm build` proves the new public types survive the `tsup` d.ts rollup.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add tests/integration/inbound/repeater-admin.test.ts docs/src/content/docs/guides/events-and-state.md README.md
-git commit -m "test: end-to-end CLI console coverage; docs: cliSendState, cliUnmatched, expectReply"
+git add tests/integration/inbound/repeater-admin.test.ts docs/src/content/docs/guides/events-and-state.md README.md package.json
+git commit -m "test: end-to-end CLI console coverage; docs and 0.5.0 version bump"
 ```
 
 ---
