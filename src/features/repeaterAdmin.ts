@@ -528,11 +528,11 @@ export async function repeaterSendCli(ctx: FeatureContext, contactKey: string, c
     text: command,
     txtType: TXT_TYPE.CLI_DATA,
   });
-  // CLI sends are still DMs at the wire level — push onto the DM send FIFO so
-  // the RESP_SENT FIFO advances correctly. The id is synthetic; the radio
-  // doesn't ack CLI sends with PUSH_SEND_CONFIRMED so we won't get a state flip.
+  // CLI sends are still DMs at the wire level — take a DM send FIFO slot so
+  // the RESP_SENT FIFO advances correctly. The id is synthetic and tagged as a
+  // CLI send, so its progress reports on `cliSendState`, not `messageState`.
   const syntheticId = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  directMessages.enqueueDmSend(ctx, syntheticId);
+  directMessages.enqueueCliSend(ctx, syntheticId, { contactKey });
   try {
     await ctx.writeFrame(frame);
   } catch (err) {

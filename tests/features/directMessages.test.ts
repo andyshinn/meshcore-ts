@@ -9,8 +9,10 @@ import {
   decodeContactMsgV3,
   decodeSendConfirmed,
   decodeSentAck,
+  dequeueDmSend,
   directMessagesFeature,
   encodeSendDmText,
+  enqueueCliSend,
   failOldestDmSend,
   resetDmState,
   sendDmText,
@@ -126,12 +128,15 @@ function makeCtx(): {
   events: MeshCoreEvents;
   writes: Buffer[];
   messageStates: Array<{ id: string; state: string }>;
+  cliStates: Array<{ id: string; contactKey: string; state: string }>;
 } {
   const state = new SessionState();
   const events = new MeshCoreEvents();
   const writes: Buffer[] = [];
   const messageStates: Array<{ id: string; state: string }> = [];
+  const cliStates: Array<{ id: string; contactKey: string; state: string }> = [];
   events.on('messageState', (id, st) => messageStates.push({ id, state: st }));
+  events.on('cliSendState', (e) => cliStates.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
   const ctx: FeatureContext = {
     writeFrame: async (frame: Buffer) => {
       writes.push(frame);
@@ -158,7 +163,7 @@ function makeCtx(): {
     getTransportState: () => 'connected',
     contactsSync: () => {},
   };
-  return { ctx, state, events, writes, messageStates };
+  return { ctx, state, events, writes, messageStates, cliStates };
 }
 
 const PK = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899';
@@ -518,5 +523,106 @@ describe('directMessages: decodeSentAck flood flag non-zero (Fix C)', () => {
     frame.writeUInt32LE(1000, 6);
     const ack = decodeSentAck(frame);
     expect(ack?.flood).toBe(false);
+  });
+});
+
+describe('directMessages: CLI sends report on cliSendState, not messageState', () => {
+  it('RESP_SENT for a CLI id emits cliSendState and leaves messageState untouched', () => {
+    const { ctx, state, messageStates, cliStates } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    expect(ctx.rt.dm.dmSendQueue).toEqual(['cli-1']);
+
+    directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
+
+    expect(messageStates).toHaveLength(0);
+    expect(cliStates).toEqual([{ id: 'cli-1', contactKey: `c:${PK}`, state: 'sent' }]);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('fires onSent when RESP_SENT pops the entry', () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    let confirmed = 0;
+    enqueueCliSend(ctx, 'cli-1', {
+      contactKey: `c:${PK}`,
+      onSent: () => {
+        confirmed += 1;
+      },
+    });
+    directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
+    expect(confirmed).toBe(1);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('PUSH_SEND_CONFIRMED for a CLI id emits cliSendState ack and frees the entry', () => {
+    const { ctx, state, messageStates, cliStates } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
+    directMessagesFeature.handle(0x82, confirmedFrame('deadbeef'), ctx);
+
+    expect(messageStates).toHaveLength(0);
+    expect(cliStates.map((c) => c.state)).toEqual(['sent', 'ack']);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
+  });
+
+  it('failOldestDmSend on a CLI id emits cliSendState failed', () => {
+    const { ctx, state, messageStates, cliStates } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    failOldestDmSend(ctx, 'disconnected');
+    expect(messageStates).toHaveLength(0);
+    expect(cliStates).toEqual([{ id: 'cli-1', contactKey: `c:${PK}`, state: 'failed' }]);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
+  });
+
+  it('frees the CLI entry immediately when no ack will follow', () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    directMessagesFeature.handle(0x06, sentFrame('00000000'), ctx);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
+    expect(ctx.rt.dm.pendingDmAcks.size).toBe(0);
+  });
+
+  it('routes interleaved DM and CLI sends to their own channels in FIFO order', () => {
+    const { ctx, state, messageStates, cliStates } = makeCtx();
+    addContact(state);
+    state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
+    ctx.rt.dm.dmSendQueue.push('m1');
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    state.insertMessage({ id: 'm2', key: `c:${PK}`, body: 'yo', ts: 2, state: 'sending' });
+    ctx.rt.dm.dmSendQueue.push('m2');
+
+    directMessagesFeature.handle(0x06, sentFrame('aaaa0001'), ctx); // → m1
+    directMessagesFeature.handle(0x06, sentFrame('aaaa0002'), ctx); // → cli-1
+    directMessagesFeature.handle(0x06, sentFrame('aaaa0003'), ctx); // → m2
+
+    expect(messageStates).toEqual([
+      { id: 'm1', state: 'sent' },
+      { id: 'm2', state: 'sent' },
+    ]);
+    expect(cliStates).toEqual([{ id: 'cli-1', contactKey: `c:${PK}`, state: 'sent' }]);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('dequeueDmSend drops the CLI tag alongside the FIFO entry', () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    dequeueDmSend(ctx, 'cli-1');
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
+  });
+
+  it('resetDmState clears the CLI tags after failing the queue', () => {
+    const { ctx, state, cliStates } = makeCtx();
+    addContact(state);
+    enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
+    resetDmState(ctx, 'disconnected');
+    expect(cliStates).toEqual([{ id: 'cli-1', contactKey: `c:${PK}`, state: 'failed' }]);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
   });
 });
