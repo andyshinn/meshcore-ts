@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { contactKindToAdvType } from '../model/contacts';
 import { ADMIN_REPLY_TIMEOUT_MS, ADMIN_SENT_TIMEOUT_MS, CLI_REPLY_TIMEOUT_MS } from '../model/timeouts';
-import type { Contact } from '../model/types';
+import type { CliSendPhase, Contact } from '../model/types';
 import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
@@ -508,8 +508,12 @@ export interface RepeaterCliOptions {
    *  Set `false` for commands the firmware never answers (`reboot`,
    *  `poweroff`, `clkreboot`, `start ota`): the handler reboots or powers down
    *  instead of writing a reply, and the firmware only transmits one when
-   *  `strlen(reply) > 0`. Those resolve `''` once the radio confirms the send,
-   *  register no awaiter, and never arm the reply timer. */
+   *  `strlen(reply) > 0`. Such a send registers no reply awaiter — it resolves
+   *  `''` the moment the radio confirms the send (RESP_SENT) and rejects as
+   *  soon as the send definitively fails. The timer it arms bounds that send
+   *  confirmation rather than a reply, which is why the default drops from
+   *  {@link CLI_REPLY_TIMEOUT_MS} to the much shorter
+   *  {@link ADMIN_SENT_TIMEOUT_MS}. */
   expectReply?: boolean;
   /** Override the wait. Defaults to {@link CLI_REPLY_TIMEOUT_MS} when
    *  `expectReply` is true, {@link ADMIN_SENT_TIMEOUT_MS} when it is false. */
@@ -547,7 +551,7 @@ export async function repeaterSendCli(
   // below can settle the promise.
   let cleanup = (): void => {};
   let failWait = (_err: Error): void => {};
-  let onSendConfirmed = (): void => {};
+  let onSendState = (_state: CliSendPhase, _reason?: string): void => {};
   const wait = new Promise<string>((resolve, reject) => {
     let entry: PendingCli | undefined;
     const timer = setTimeout(() => {
@@ -576,12 +580,23 @@ export async function repeaterSendCli(
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
-    // A fire-and-forget send resolves on the radio's RESP_SENT instead — it
-    // registers no awaiter, so the single per-repeater slot stays free for a
-    // command that does expect an answer.
-    onSendConfirmed = (): void => {
-      cleanup();
-      resolve('');
+    // A fire-and-forget send settles on the DM send FIFO's own bookkeeping
+    // instead — it registers no awaiter, so the single per-repeater slot stays
+    // free for a command that does expect an answer. That also means nothing
+    // else can settle it: resetAdmin has no pendingCli entry to reject, so a
+    // definite failure has to arrive through here or the caller waits out the
+    // whole timeout and is told the send "was not confirmed" — which is both
+    // late and the wrong reason.
+    onSendState = (state: CliSendPhase, reason?: string): void => {
+      if (state === 'failed') {
+        failWait(new Error(reason ? `CLI send failed: ${reason}` : 'CLI send failed'));
+        return;
+      }
+      // 'ack' may still follow the resolve; resolve() is a no-op by then.
+      if (state === 'sent') {
+        cleanup();
+        resolve('');
+      }
     };
     if (!expectReply) return;
 
@@ -616,20 +631,23 @@ export async function repeaterSendCli(
   const syntheticId = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   directMessages.enqueueCliSend(ctx, syntheticId, {
     contactKey,
-    // Only a fire-and-forget send settles on RESP_SENT; a reply-expecting one
-    // must keep waiting for the repeater's answer.
-    onSent: expectReply ? undefined : onSendConfirmed,
+    // Only a fire-and-forget send settles on the wire state; a reply-expecting
+    // one must keep waiting for the repeater's answer.
+    onState: expectReply ? undefined : onSendState,
   });
-  try {
-    await ctx.writeFrame(frame);
-  } catch (err) {
+  // Fire the write off and hand `wait` straight back, the same shape
+  // sendTaggedReq uses. Awaiting the write here would suspend before anything
+  // has chained onto `wait`, so an abort / supersede / short timeout landing
+  // inside the write window — a BLE GATT write or serial drain is milliseconds
+  // wide — would reject a promise with no handler attached, which Node reports
+  // as an unhandled rejection (fatal under its default
+  // --unhandled-rejections=throw). The caller still sees the same rejection.
+  ctx.writeFrame(frame).catch((err) => {
     // The radio won't reply with RESP_SENT, so pop the entry to keep the FIFO
-    // aligned. Returning `wait` (rather than rethrowing) surfaces the same
-    // error while leaving no dangling rejected promise behind.
+    // aligned, and settle `wait` with the write error.
     directMessages.dequeueDmSend(ctx, syntheticId);
     failWait(err as Error);
-    return wait;
-  }
+  });
   return wait;
 }
 

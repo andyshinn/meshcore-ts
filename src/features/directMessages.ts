@@ -30,9 +30,13 @@ export interface DmAdminHooks {
 export interface CliSendMeta {
   /** Contact the command was addressed to — carried on every `cliSendState`. */
   contactKey: string;
-  /** Fired when RESP_SENT pops this id off the FIFO. A fire-and-forget CLI
-   *  send (`expectReply: false`) resolves here. */
-  onSent?: () => void;
+  /** Fired for every wire phase this send reports, immediately after the
+   *  matching `cliSendState` event, with the failure text when one is known.
+   *  A fire-and-forget CLI send (`expectReply: false`) settles here: it
+   *  resolves on 'sent' and rejects on 'failed', so a send the radio or the
+   *  transport definitively killed doesn't sit until its timeout and then
+   *  report itself as merely unconfirmed. */
+  onState?: (state: CliSendPhase, reason?: string) => void;
 }
 
 /** Per-session DM send/ack state (was the module-level dmSendQueue /
@@ -365,14 +369,20 @@ function awaitDmOutcome(ctx: FeatureContext, messageId: string, timeoutMs: numbe
 /** Report a wire-state transition for a queued send. CLI sends go out on
  *  `cliSendState` and never touch the message store — there is no message
  *  record behind a synthetic CLI id, and consumers must be able to tell the
- *  two apart. DMs behave exactly as before. */
-function emitSendState(ctx: FeatureContext, id: string, state: CliSendPhase): void {
+ *  two apart. DMs behave exactly as before.
+ *
+ *  `reason` is the failure text for a 'failed' transition; it reaches the CLI
+ *  send's own `onState` hook (never the event payload, whose shape is public). */
+function emitSendState(ctx: FeatureContext, id: string, state: CliSendPhase, reason?: string): void {
   const cli = ctx.rt.dm.cliSends.get(id);
   if (cli) {
     // 'sent' is not terminal — an ACK may still follow. handleSent owns
     // freeing the entry once it knows whether one is coming.
     if (state !== 'sent') ctx.rt.dm.cliSends.delete(id);
     ctx.events.emit('cliSendState', { id, contactKey: cli.contactKey, state });
+    // Held in `cli`, so the delete above doesn't stop a terminal phase from
+    // reaching the sender — a fire-and-forget send settles on it.
+    cli.onState?.(state, reason);
     return;
   }
   ctx.state.setMessageState(id, state);
@@ -383,7 +393,7 @@ function emitSendState(ctx: FeatureContext, id: string, state: CliSendPhase): vo
 export function failOldestDmSend(ctx: FeatureContext, reason: string): void {
   const messageId = ctx.rt.dm.dmSendQueue.shift();
   if (!messageId) return;
-  emitSendState(ctx, messageId, 'failed');
+  emitSendState(ctx, messageId, 'failed', reason);
   ctx.log.warn(`send failed id=${messageId}: ${reason}`);
 }
 
@@ -471,13 +481,14 @@ function handleSent(frame: Buffer, ctx: FeatureContext): void {
     // RESP_SENT for a non-DM (e.g. channel send echo) — no state machine.
     return;
   }
+  // Read the CLI tag before emitting: emitSendState may free the entry, and it
+  // also fires the send's own onState hook — which is where a fire-and-forget
+  // CLI send resolves, the instant the radio confirms it.
   const cli = ctx.rt.dm.cliSends.get(messageId);
   emitSendState(ctx, messageId, 'sent');
   ctx.log.debug(
     `${cli ? 'cli' : 'dm'} sent id=${messageId} flood=${sent.flood} ack=${sent.expectedAckHex} timeout=${sent.estTimeoutMs}ms`,
   );
-  // A fire-and-forget CLI send resolves the instant the radio confirms it.
-  cli?.onSent?.();
 
   if (sent.expectedAckHex !== '00000000') {
     const timer = setTimeout(() => {

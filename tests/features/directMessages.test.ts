@@ -541,19 +541,49 @@ describe('directMessages: CLI sends report on cliSendState, not messageState', (
     resetDmState(ctx, 'cleanup');
   });
 
-  it('fires onSent when RESP_SENT pops the entry', () => {
+  it('fires onState with the phase when RESP_SENT pops the entry', () => {
     const { ctx, state } = makeCtx();
     addContact(state);
-    let confirmed = 0;
+    const phases: Array<[string, string | undefined]> = [];
     enqueueCliSend(ctx, 'cli-1', {
       contactKey: `c:${PK}`,
-      onSent: () => {
-        confirmed += 1;
-      },
+      onState: (s, reason) => phases.push([s, reason]),
     });
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
-    expect(confirmed).toBe(1);
+    expect(phases).toEqual([['sent', undefined]]);
+    directMessagesFeature.handle(0x82, confirmedFrame('deadbeef'), ctx);
+    expect(phases).toEqual([
+      ['sent', undefined],
+      ['ack', undefined],
+    ]);
     resetDmState(ctx, 'cleanup');
+  });
+
+  it('fires onState with the failure reason when failOldestDmSend drops the entry', () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    const phases: Array<[string, string | undefined]> = [];
+    enqueueCliSend(ctx, 'cli-1', {
+      contactKey: `c:${PK}`,
+      onState: (s, reason) => phases.push([s, reason]),
+    });
+    // The entry is deleted for a terminal phase — the hook must still fire, or
+    // a fire-and-forget sender never learns the send died.
+    failOldestDmSend(ctx, 'radio rejected send');
+    expect(phases).toEqual([['failed', 'radio rejected send']]);
+    expect(ctx.rt.dm.cliSends.size).toBe(0);
+  });
+
+  it('fires onState with the disconnect reason when resetDmState tears the FIFO down', () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    const phases: Array<[string, string | undefined]> = [];
+    enqueueCliSend(ctx, 'cli-1', {
+      contactKey: `c:${PK}`,
+      onState: (s, reason) => phases.push([s, reason]),
+    });
+    resetDmState(ctx, 'transport disconnected');
+    expect(phases).toEqual([['failed', 'transport disconnected']]);
   });
 
   it('PUSH_SEND_CONFIRMED for a CLI id emits cliSendState ack and frees the entry', () => {
