@@ -211,4 +211,67 @@ describe('repeater administration', () => {
     const reply = await p;
     expect(reply).toBe('OK rebooting');
   });
+
+  it('resolves a fire-and-forget CLI send on RESP_SENT without arming a reply wait', async () => {
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+    session.state.upsertContact(repeater());
+
+    const states: Array<{ contactKey: string; state: string }> = [];
+    session.events.on('cliSendState', (e) => states.push({ contactKey: e.contactKey, state: e.state }));
+    const messageStates: string[] = [];
+    session.events.on('messageState', (id) => messageStates.push(id));
+
+    const p = session.repeaterSendCli(`c:${PK}`, 'reboot', { expectReply: false });
+    await tick();
+    expect(transport.sent[0][0]).toBe(0x02); // CMD_SEND_TXT_MSG
+    expect(transport.sent[0][1]).toBe(1); // TXT_TYPE.CLI_DATA
+
+    deliver(transport, respSent('00000000'));
+    await expect(p).resolves.toBe('');
+
+    expect(states).toEqual([{ contactKey: `c:${PK}`, state: 'sent' }]);
+    expect(messageStates).toHaveLength(0); // no junk on the DM channel
+  });
+
+  it('cancels an in-flight CLI command via AbortSignal', async () => {
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+    session.state.upsertContact(repeater());
+
+    const ac = new AbortController();
+    const reason = new Error('repeater switched');
+    const p = session.repeaterSendCli(`c:${PK}`, 'ver', { signal: ac.signal });
+    await tick();
+    ac.abort(reason);
+    await expect(p).rejects.toBe(reason);
+
+    // A cancel does not poison the session: a follow-up command still registers
+    // and still gets its own reply routed to it.
+    const next = session.repeaterSendCli(`c:${PK}`, 'time', { timeoutMs: 500 });
+    await tick();
+    deliver(transport, cliReply(PREFIX, '1700000000'));
+    await expect(next).resolves.toBe('1700000000');
+  });
+
+  it('surfaces a late reply to a cancelled command on cliUnmatched, not the message store', async () => {
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+    session.state.upsertContact(repeater());
+
+    const late: Array<{ contactKey?: string; body: string }> = [];
+    session.events.on('cliUnmatched', (e) => late.push({ contactKey: e.contactKey, body: e.body }));
+
+    const ac = new AbortController();
+    const p = session.repeaterSendCli(`c:${PK}`, 'ver', { signal: ac.signal });
+    await tick();
+    ac.abort(new Error('cancelled'));
+    await expect(p).rejects.toThrow(/cancelled/);
+
+    deliver(transport, cliReply(PREFIX, 'v1.2.3'));
+    await tick();
+
+    expect(late).toEqual([{ contactKey: `c:${PK}`, body: 'v1.2.3' }]);
+    expect(session.state.getMessagesForKey(`c:${PK}`)).toHaveLength(0);
+  });
 });

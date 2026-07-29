@@ -1570,9 +1570,14 @@ export class MeshCoreSession {
     return repeaterAdmin.repeaterRequestAvgMinMax(this.ctx, contactKey, opts);
   }
 
-  /** Send a remote CLI command; the reply is routed back by sender prefix. */
-  async repeaterSendCli(contactKey: string, command: string): Promise<string> {
-    return repeaterAdmin.repeaterSendCli(this.ctx, contactKey, command);
+  /** Send a remote CLI command; the reply is routed back by sender prefix.
+   *  Pass `{ expectReply: false }` for the commands the firmware never answers
+   *  (`reboot`, `poweroff`, `clkreboot`, `start ota`) — those resolve `''` as
+   *  soon as the radio confirms the send. `timeoutMs` and `signal` bound the
+   *  wait; the defaults are `Models.CLI_REPLY_TIMEOUT_MS` and
+   *  `Models.ADMIN_SENT_TIMEOUT_MS`. */
+  async repeaterSendCli(contactKey: string, command: string, opts: repeaterAdmin.RepeaterCliOptions = {}): Promise<string> {
+    return repeaterAdmin.repeaterSendCli(this.ctx, contactKey, command, opts);
   }
 
   /** CMD_SEND_TRACE_PATH — diagnostic trace along a known path. */

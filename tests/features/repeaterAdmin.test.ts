@@ -4,7 +4,7 @@ import { AdminSessionStore } from '../../src/features/adminSessions';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
 import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
-import { createDmRuntime, directMessagesFeature } from '../../src/features/directMessages';
+import { createDmRuntime, directMessagesFeature, failOldestDmSend, resetDmState } from '../../src/features/directMessages';
 import { createDrainRuntime } from '../../src/features/drain';
 import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
@@ -561,5 +561,354 @@ describe('repeaterAdmin: repeaterRequestAvgMinMax', () => {
     const res = await p;
     expect(res.nowUnix).toBe(42);
     expect(res.series[0]).toMatchObject({ channel: 1, name: 'Temperature', min: 20, max: 25.5, avg: 22.5 });
+  });
+});
+
+describe('repeaterAdmin: repeaterSendCli options — timeout + abort', () => {
+  it('honours a per-call timeoutMs and clears the pendingCli slot', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/timed out after 10ms/);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+  });
+
+  it('leaves the DM FIFO entry in place after a timeout', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/timed out/);
+    // A RESP_SENT may still be in flight; popping the entry here would
+    // mis-attribute the next real DM's 'sent' event.
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('rejects immediately on an already-aborted signal, writing nothing', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    ac.abort();
+    await expect(repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal })).rejects.toThrow();
+    expect(writes).toHaveLength(0);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+  });
+
+  it('rejects with signal.reason when aborted after the send', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    const reason = new Error('repeater switched');
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal });
+    await tick();
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+
+    ac.abort(reason);
+
+    await expect(p).rejects.toBe(reason);
+    // Awaiter dropped so the next command can use the slot; FIFO untouched.
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('defaults to a 30s reply wait when no timeoutMs is given', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    await tick();
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+    // Settle it so the 30s timer doesn't hold the suite open.
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
+    await expect(p).resolves.toBe('v1.2.3');
+  });
+
+  it('rejects the promise (not just throws) when the write fails', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    ctx.writeFrame = async () => {
+      throw new Error('transport down');
+    };
+
+    await expect(repeaterSendCli(ctx, `c:${PK}`, 'ver')).rejects.toThrow(/transport down/);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
+  });
+});
+
+describe('repeaterAdmin: repeaterSendCli settles without unhandled rejections', () => {
+  // A real BLE GATT write / serial drain takes milliseconds to complete. The
+  // awaiter promise must be in the caller's hands before that write settles —
+  // if the send path awaits the write first, an abort / supersede / short
+  // timeout landing inside that window rejects a promise nothing is holding
+  // yet, which Node reports as an unhandled rejection (fatal in the consumer's
+  // process under the default --unhandled-rejections=throw).
+  function slowWrite(ctx: FeatureContext, writes: Buffer[], ms: number): void {
+    ctx.writeFrame = (frame: Buffer) =>
+      new Promise<void>((resolve) => {
+        writes.push(frame);
+        setTimeout(resolve, ms);
+      });
+  }
+
+  // Run `fn` with a process-level unhandledRejection probe attached, and hand
+  // back everything Node reported while it ran.
+  async function unhandledDuring(fn: () => Promise<void>): Promise<unknown[]> {
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      seen.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await fn();
+      await tick();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    return seen;
+  }
+
+  it('an abort landing while the write is in flight is not an unhandled rejection', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    slowWrite(ctx, writes, 20);
+
+    const ac = new AbortController();
+    const reason = new Error('user cancelled');
+    const seen = await unhandledDuring(async () => {
+      const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal });
+      ac.abort(reason); // the console's Cancel button, mid-write
+      await expect(p).rejects.toBe(reason);
+    });
+
+    expect(seen).toEqual([]);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('a supersede landing while the write is in flight is not an unhandled rejection', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    slowWrite(ctx, writes, 20);
+
+    const seen = await unhandledDuring(async () => {
+      const first = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+      const second = repeaterSendCli(ctx, `c:${PK}`, 'time'); // supersedes mid-write
+      await expect(first).rejects.toThrow(/superseded/);
+      directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, '1700000000'), ctx);
+      await expect(second).resolves.toBe('1700000000');
+    });
+
+    expect(seen).toEqual([]);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('a timeout expiring while the write is in flight is not an unhandled rejection', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    slowWrite(ctx, writes, 30);
+
+    const seen = await unhandledDuring(async () => {
+      const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { timeoutMs: 5 });
+      await expect(p).rejects.toThrow(/timed out after 5ms/);
+    });
+
+    expect(seen).toEqual([]);
+    resetDmState(ctx, 'cleanup');
+  });
+});
+
+describe('repeaterAdmin: repeaterSendCli supersede/identity race', () => {
+  it("a superseded command's late write failure leaves the newer awaiter in place", async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    // The first write hangs until we fail it; every later write succeeds.
+    let writeCalls = 0;
+    let failFirstWrite = (_err: Error): void => {};
+    ctx.writeFrame = (frame: Buffer) => {
+      writes.push(frame);
+      writeCalls += 1;
+      if (writeCalls > 1) return Promise.resolve();
+      return new Promise<void>((_resolve, reject) => {
+        failFirstWrite = reject;
+      });
+    };
+
+    const first = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    const firstEntry = ctx.rt.adminCorr.pendingCli.get(PREFIX);
+    const second = repeaterSendCli(ctx, `c:${PK}`, 'time');
+    const secondEntry = ctx.rt.adminCorr.pendingCli.get(PREFIX);
+    expect(secondEntry).toBeDefined();
+    expect(secondEntry).not.toBe(firstEntry);
+    await expect(first).rejects.toThrow(/superseded/);
+
+    // The superseded command's write now fails, long after the newer command
+    // took the slot. Its cleanup must evict only its OWN entry — deleting by
+    // prefix would silently drop the live one, whose reply would then land on
+    // cliUnmatched and whose caller would time out.
+    failFirstWrite(new Error('transport down'));
+    await tick();
+    expect(ctx.rt.adminCorr.pendingCli.get(PREFIX)).toBe(secondEntry);
+
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, '1700000000'), ctx);
+    await expect(second).resolves.toBe('1700000000');
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('a fire-and-forget timing out leaves a concurrent reply-expecting awaiter in place', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const fire = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false, timeoutMs: 10 });
+    const ask = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    const askEntry = ctx.rt.adminCorr.pendingCli.get(PREFIX);
+    expect(askEntry).toBeDefined();
+
+    // The fire-and-forget owns no pendingCli entry, so its timer firing must
+    // not clear the slot the reply-expecting command is holding.
+    await expect(fire).rejects.toThrow(/send was not confirmed/);
+    expect(ctx.rt.adminCorr.pendingCli.get(PREFIX)).toBe(askEntry);
+
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
+    await expect(ask).resolves.toBe('v1.2.3');
+    resetDmState(ctx, 'cleanup');
+  });
+});
+
+describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
+  it('registers no pendingCli awaiter and still writes the CLI_DATA DM', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
+    await tick();
+
+    expect(ctx.rt.adminCorr.pendingCli.size).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0][0]).toBe(0x02); // CMD_SEND_TXT_MSG
+    expect(writes[0][1]).toBe(TXT_TYPE.CLI_DATA);
+    expect(writes[0].subarray(13).toString('utf8')).toBe('reboot');
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+
+    directMessagesFeature.handle(0x06, sentTag('00000000'), ctx);
+    await expect(p).resolves.toBe('');
+  });
+
+  it('does not consume the pendingCli slot a concurrent command needs', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const fire = repeaterSendCli(ctx, `c:${PK}`, 'clkreboot', { expectReply: false });
+    const ask = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    await tick();
+
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+
+    directMessagesFeature.handle(0x06, sentTag('00000000'), ctx); // pops the fire-and-forget
+    await expect(fire).resolves.toBe('');
+
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
+    await expect(ask).resolves.toBe('v1.2.3');
+  });
+
+  it('rejects when the send is never confirmed within the timeout', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'poweroff', { expectReply: false, timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/send was not confirmed after 10ms/);
+    expect(ctx.rt.adminCorr.pendingCli.size).toBe(0);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('is abortable before the send is confirmed', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    const reason = new Error('user cancelled');
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'start ota', { expectReply: false, signal: ac.signal });
+    await tick();
+    ac.abort(reason);
+
+    await expect(p).rejects.toBe(reason);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  // A fire-and-forget send registers no pendingCli entry, so resetAdmin has
+  // nothing to reject on its behalf — the DM send FIFO is the only thing that
+  // knows the send died. Both definite-failure paths must settle it with the
+  // real reason instead of letting it wait out the full timeout and then
+  // reject with a misleading "not confirmed" message.
+  it('rejects with the disconnect reason when resetDmState tears the send FIFO down', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    // Generous timeout: only the failure itself may settle this promise.
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false, timeoutMs: 60_000 });
+    await tick();
+
+    resetDmState(ctx, 'transport disconnected');
+    await expect(p).rejects.toThrow(/transport disconnected/);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+  });
+
+  it('rejects with the radio-rejection reason when failOldestDmSend drops the send', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'poweroff', { expectReply: false, timeoutMs: 60_000 });
+    await tick();
+
+    failOldestDmSend(ctx, 'radio rejected send');
+    await expect(p).rejects.toThrow(/radio rejected send/);
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
+  });
+
+  it('reports on cliSendState even after the promise has already resolved', async () => {
+    const { ctx, state, events } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    const seen: Array<{ id: string; contactKey: string; state: string }> = [];
+    events.on('cliSendState', (e) => seen.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
+    await tick();
+    directMessagesFeature.handle(0x06, sentTag('deadbeef'), ctx);
+    await expect(p).resolves.toBe('');
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ contactKey: `c:${PK}`, state: 'sent' });
+    expect(seen[0].id.startsWith('cli-')).toBe(true);
+
+    // A late ACK still reports — the stronger signal arrives after the resolve.
+    directMessagesFeature.handle(
+      0x82,
+      Buffer.concat([Buffer.from([0x82]), Buffer.from('deadbeef', 'hex'), Buffer.alloc(4)]),
+      ctx,
+    );
+    expect(seen.map((s) => s.state)).toEqual(['sent', 'ack']);
   });
 });

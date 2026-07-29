@@ -115,13 +115,13 @@ class BleTransport implements Transport {
 
 ## Events
 
-`transportState`, `channels`, `channelPresence`, `syncProgress`, `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `messages`, `messageState`, `messagePathHeard`, `owner`, `radioSettings`, `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
+`transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`, `contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`, `contactObserved`, `messages`, `messageUpserted`, `messageState`, `messagePathHeard`, `cliSendState`, `cliUnmatched`, `owner`, `radioSettings`, `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`, `autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`, `deviceCapabilities`.
 
 All payloads are exported types (see `MeshCoreEventMap`).
 
 ## What the session can do
 
-Messaging (`sendChannelText`, `sendDmText`, `sendDmTextWithRetry`), contacts & paths (`getContactByKey`, `setContactPath`, `resetContactPath`, `addContactToRadio`, `removeContactFromRadio`, `setContactFavourite`, `setPathHashMode`), channels (`setChannel`, `pickFreeSlot`, `deriveSecret`, …), radio/device settings (`setRadioParams`, `setAdvertName`, `setAdvertLatLon`, `setOtherParams`, `setAutoAddConfig`, `setGpsConfig`, `reboot`, …), time (`getDeviceTime`/`setDeviceTime`/`syncDeviceTime`), device admin & signing (`exportPrivateKey`, `importPrivateKey`, `setDevicePin`, `factoryReset`, `signData`), path diagnostics & raw frames (`sendPathDiscoveryReq`, `getAdvertPath`, `sendRawData`, …), and repeater administration (`repeaterLogin`, `repeaterSendCli`, `repeaterRequestAcl`, `repeaterRequestNeighbours`, `repeaterRequestOwnerInfo`, `repeaterTracePath`, `repeaterGetLocalStats`, `sendStatusReq`, `sendTelemetryReq`).
+Messaging (`sendChannelText`, `sendDmText`, `sendDmTextWithRetry`), contacts & paths (`getContactByKey`, `setContactPath`, `resetContactPath`, `addContactToRadio`, `removeContactFromRadio`, `setContactFavourite`, `setPathHashMode`), channels (`setChannel`, `pickFreeSlot`, `deriveSecret`, …), radio/device settings (`setRadioParams`, `setAdvertName`, `setAdvertLatLon`, `setOtherParams`, `setAutoAddConfig`, `setGpsConfig`, `reboot`, …), time (`getDeviceTime`/`setDeviceTime`/`syncDeviceTime`), device admin & signing (`exportPrivateKey`, `importPrivateKey`, `setDevicePin`, `factoryReset`, `signData`), path diagnostics & raw frames (`sendPathDiscoveryReq`, `getAdvertPath`, `sendRawData`, …), and repeater administration (`repeaterLogin`, `repeaterSendCli` (with `expectReply` / `timeoutMs` / `signal`), `repeaterRequestAcl`, `repeaterRequestNeighbours`, `repeaterRequestOwnerInfo`, `repeaterTracePath`, `repeaterGetLocalStats`, `sendStatusReq`, `sendTelemetryReq`).
 
 ## Extending the protocol
 

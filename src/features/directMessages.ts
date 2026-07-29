@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { Contact, Message, MessageState } from '../model/types';
+import type { CliSendPhase, Contact, Message, MessageState } from '../model/types';
 import { CMD, PUSH, RESP, TXT_TYPE } from '../protocol/codes';
 import { encodeResetPath } from './contacts';
 import * as drain from './drain';
@@ -26,6 +26,19 @@ export interface DmAdminHooks {
   onCliReply?: (senderPrefixHex: string, body: string) => boolean;
 }
 
+/** A CLI send's identity on the DM send FIFO. */
+export interface CliSendMeta {
+  /** Contact the command was addressed to — carried on every `cliSendState`. */
+  contactKey: string;
+  /** Fired for every wire phase this send reports, immediately after the
+   *  matching `cliSendState` event, with the failure text when one is known.
+   *  A fire-and-forget CLI send (`expectReply: false`) settles here: it
+   *  resolves on 'sent' and rejects on 'failed', so a send the radio or the
+   *  transport definitively killed doesn't sit until its timeout and then
+   *  report itself as merely unconfirmed. */
+  onState?: (state: CliSendPhase, reason?: string) => void;
+}
+
 /** Per-session DM send/ack state (was the module-level dmSendQueue /
  *  pendingDmAcks / adminHooks). */
 export interface DmRuntime {
@@ -35,11 +48,14 @@ export interface DmRuntime {
   // expected_ack hex → message id, populated on RESP_SENT and cleared on
   // PUSH_SEND_CONFIRMED or after ACK_RETENTION_MS.
   pendingDmAcks: Map<string, { messageId: string; timer: ReturnType<typeof setTimeout> }>;
+  // Ids on dmSendQueue that are CLI sends, not DMs. They share the radio's
+  // send bookkeeping but report on `cliSendState`, never `messageState`.
+  cliSends: Map<string, CliSendMeta>;
   adminHooks: DmAdminHooks;
 }
 
 export function createDmRuntime(): DmRuntime {
-  return { dmSendQueue: [], pendingDmAcks: new Map(), adminHooks: {} };
+  return { dmSendQueue: [], pendingDmAcks: new Map(), cliSends: new Map(), adminHooks: {} };
 }
 
 // ---- Encoder -----------------------------------------------------------
@@ -193,16 +209,21 @@ export function setAdminHooks(ctx: FeatureContext, hooks: DmAdminHooks): void {
   ctx.rt.dm.adminHooks = hooks;
 }
 
-/** Push a message id onto the DM send FIFO. Exported for the admin CLI send
- *  path, whose sends are DMs at the wire level. */
-export function enqueueDmSend(ctx: FeatureContext, id: string): void {
+/** Push a CLI send onto the DM send FIFO. CLI commands are DMs at the wire
+ *  level, so they must hold a FIFO slot for the RESP_SENT/ACK bookkeeping to
+ *  stay aligned — but they are tagged here so their progress reports on
+ *  `cliSendState` instead of `messageState`. */
+export function enqueueCliSend(ctx: FeatureContext, id: string, meta: CliSendMeta): void {
+  ctx.rt.dm.cliSends.set(id, meta);
   ctx.rt.dm.dmSendQueue.push(id);
 }
 
-/** Remove a message id from the DM send FIFO (on write failure). */
+/** Remove an id from the DM send FIFO (on write failure), dropping its CLI tag
+ *  if it had one. */
 export function dequeueDmSend(ctx: FeatureContext, id: string): void {
   const i = ctx.rt.dm.dmSendQueue.indexOf(id);
   if (i !== -1) ctx.rt.dm.dmSendQueue.splice(i, 1);
+  ctx.rt.dm.cliSends.delete(id);
 }
 
 /** Send a DM to a contact. Returns ok on transport-level write success; the
@@ -345,13 +366,35 @@ function awaitDmOutcome(ctx: FeatureContext, messageId: string, timeoutMs: numbe
   });
 }
 
-/** Fail the oldest in-flight DM (bare RESP_ERR, or disconnect). */
+/** Report a wire-state transition for a queued send. CLI sends go out on
+ *  `cliSendState` and never touch the message store — there is no message
+ *  record behind a synthetic CLI id, and consumers must be able to tell the
+ *  two apart. DMs behave exactly as before.
+ *
+ *  `reason` is the failure text for a 'failed' transition; it reaches the CLI
+ *  send's own `onState` hook (never the event payload, whose shape is public). */
+function emitSendState(ctx: FeatureContext, id: string, state: CliSendPhase, reason?: string): void {
+  const cli = ctx.rt.dm.cliSends.get(id);
+  if (cli) {
+    // 'sent' is not terminal — an ACK may still follow. handleSent owns
+    // freeing the entry once it knows whether one is coming.
+    if (state !== 'sent') ctx.rt.dm.cliSends.delete(id);
+    ctx.events.emit('cliSendState', { id, contactKey: cli.contactKey, state });
+    // Held in `cli`, so the delete above doesn't stop a terminal phase from
+    // reaching the sender — a fire-and-forget send settles on it.
+    cli.onState?.(state, reason);
+    return;
+  }
+  ctx.state.setMessageState(id, state);
+  ctx.events.emit('messageState', id, state);
+}
+
+/** Fail the oldest in-flight send (bare RESP_ERR, or disconnect). */
 export function failOldestDmSend(ctx: FeatureContext, reason: string): void {
   const messageId = ctx.rt.dm.dmSendQueue.shift();
   if (!messageId) return;
-  ctx.state.setMessageState(messageId, 'failed');
-  ctx.events.emit('messageState', messageId, 'failed');
-  ctx.log.warn(`dm failed id=${messageId}: ${reason}`);
+  emitSendState(ctx, messageId, 'failed', reason);
+  ctx.log.warn(`send failed id=${messageId}: ${reason}`);
 }
 
 /** Tear down the DM send/ack state on disconnect so callers don't hang. */
@@ -359,6 +402,7 @@ export function resetDmState(ctx: FeatureContext, reason: string): void {
   while (ctx.rt.dm.dmSendQueue.length > 0) failOldestDmSend(ctx, reason);
   for (const entry of ctx.rt.dm.pendingDmAcks.values()) clearTimeout(entry.timer);
   ctx.rt.dm.pendingDmAcks.clear();
+  ctx.rt.dm.cliSends.clear();
 }
 
 // ---- Inbound handlers --------------------------------------------------
@@ -366,13 +410,27 @@ export function resetDmState(ctx: FeatureContext, reason: string): void {
 function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): void {
   const parsed = code === RESP.CONTACT_MSG_RECV_V3 ? decodeContactMsgV3(frame) : decodeContactMsgV1(frame);
   if (!parsed) return;
-  // CLI replies arrive on the same opcode as DMs; route them to the matching
-  // admin awaiter and don't insert them into the message store.
+  // CLI replies arrive on the same opcode as DMs. Route them to the matching
+  // admin awaiter; an unmatched one (late answer to a timed-out or cancelled
+  // command, or unsolicited output) surfaces on its own channel. Either way a
+  // CLI reply never enters the message store.
   if (parsed.txtType === TXT_TYPE.CLI_DATA) {
-    if (ctx.rt.dm.adminHooks.onCliReply?.(parsed.senderPubKeyPrefixHex.toLowerCase(), parsed.body)) {
-      if (drain.isDraining(ctx)) drain.pumpAfterRecv(ctx);
-      return;
+    const senderPrefixHex = parsed.senderPubKeyPrefixHex.toLowerCase();
+    if (!ctx.rt.dm.adminHooks.onCliReply?.(senderPrefixHex, parsed.body)) {
+      const known = ctx.state.getContacts().find((c) => c.publicKeyHex.toLowerCase().startsWith(senderPrefixHex));
+      ctx.events.emit('cliUnmatched', {
+        contactKey: known?.key,
+        senderPrefixHex,
+        body: parsed.body,
+        receivedAt: Date.now(),
+      });
+      ctx.log.debug(`unmatched cli reply from=${senderPrefixHex} body=${JSON.stringify(parsed.body.slice(0, 60))}`);
     }
+    // The radio only tickles PUSH_MSG_WAITING once per queue event; keep
+    // pulling until NO_MORE_MESSAGES. Must run on BOTH branches — this return
+    // now short-circuits the pump at the end of the function.
+    if (drain.isDraining(ctx)) drain.pumpAfterRecv(ctx);
+    return;
   }
 
   const prefix = parsed.senderPubKeyPrefixHex;
@@ -423,15 +481,26 @@ function handleSent(frame: Buffer, ctx: FeatureContext): void {
     // RESP_SENT for a non-DM (e.g. channel send echo) — no state machine.
     return;
   }
-  ctx.state.setMessageState(messageId, 'sent');
-  ctx.events.emit('messageState', messageId, 'sent');
-  ctx.log.debug(`dm sent id=${messageId} flood=${sent.flood} ack=${sent.expectedAckHex} timeout=${sent.estTimeoutMs}ms`);
+  // Read the CLI tag before emitting: emitSendState may free the entry, and it
+  // also fires the send's own onState hook — which is where a fire-and-forget
+  // CLI send resolves, the instant the radio confirms it.
+  const cli = ctx.rt.dm.cliSends.get(messageId);
+  emitSendState(ctx, messageId, 'sent');
+  ctx.log.debug(
+    `${cli ? 'cli' : 'dm'} sent id=${messageId} flood=${sent.flood} ack=${sent.expectedAckHex} timeout=${sent.estTimeoutMs}ms`,
+  );
 
   if (sent.expectedAckHex !== '00000000') {
     const timer = setTimeout(() => {
       ctx.rt.dm.pendingDmAcks.delete(sent.expectedAckHex);
+      // The ack never came — stop tracking the CLI send too, so the tag map
+      // can't outlive the ack window.
+      ctx.rt.dm.cliSends.delete(messageId);
     }, ACK_RETENTION_MS);
     ctx.rt.dm.pendingDmAcks.set(sent.expectedAckHex, { messageId, timer });
+  } else {
+    // No ack will follow; 'sent' was this send's final state.
+    ctx.rt.dm.cliSends.delete(messageId);
   }
 }
 
@@ -442,9 +511,8 @@ function handleSendConfirmed(frame: Buffer, ctx: FeatureContext): void {
   if (!entry) return;
   clearTimeout(entry.timer);
   ctx.rt.dm.pendingDmAcks.delete(conf.ackHex);
-  ctx.state.setMessageState(entry.messageId, 'ack');
-  ctx.events.emit('messageState', entry.messageId, 'ack');
-  ctx.log.debug(`dm ack id=${entry.messageId} ack=${conf.ackHex} rtt=${conf.tripTimeMs}ms`);
+  emitSendState(ctx, entry.messageId, 'ack');
+  ctx.log.debug(`send ack id=${entry.messageId} ack=${conf.ackHex} rtt=${conf.tripTimeMs}ms`);
 }
 
 export const directMessagesFeature: Feature = {

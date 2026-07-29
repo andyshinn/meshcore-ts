@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { contactKindToAdvType } from '../model/contacts';
-import type { Contact } from '../model/types';
+import { ADMIN_REPLY_TIMEOUT_MS, ADMIN_SENT_TIMEOUT_MS, CLI_REPLY_TIMEOUT_MS } from '../model/timeouts';
+import type { CliSendPhase, Contact } from '../model/types';
 import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
@@ -40,10 +41,6 @@ import type { Feature, FeatureContext } from './feature';
  *  `'direct'` (companion-side CMD_SEND_LOGIN), `'path'` (mesh-routed over a known
  *  out-path) or `'flood'` (mesh-routed, no path). */
 export type RepeaterReachMode = 'direct' | 'flood' | 'path';
-
-const ADMIN_SENT_TIMEOUT_MS = 5_000;
-const ADMIN_REPLY_TIMEOUT_MS = 20_000;
-const CLI_REPLY_TIMEOUT_MS = 30_000;
 
 // ---- Admin-coordination state ------------------------------------------
 
@@ -505,49 +502,152 @@ export async function repeaterRequestAvgMinMax(
   return parsed;
 }
 
+/** Options for {@link repeaterSendCli}. */
+export interface RepeaterCliOptions {
+  /** Wait for the repeater's CLI reply. Default `true` — current behavior.
+   *  Set `false` for commands the firmware never answers (`reboot`,
+   *  `poweroff`, `clkreboot`, `start ota`): the handler reboots or powers down
+   *  instead of writing a reply, and the firmware only transmits one when
+   *  `strlen(reply) > 0`. Such a send registers no reply awaiter — it resolves
+   *  `''` the moment the radio confirms the send (RESP_SENT) and rejects as
+   *  soon as the send definitively fails. The timer it arms bounds that send
+   *  confirmation rather than a reply, which is why the default drops from
+   *  {@link CLI_REPLY_TIMEOUT_MS} to the much shorter
+   *  {@link ADMIN_SENT_TIMEOUT_MS}. */
+  expectReply?: boolean;
+  /** Override the wait. Defaults to {@link CLI_REPLY_TIMEOUT_MS} when
+   *  `expectReply` is true, {@link ADMIN_SENT_TIMEOUT_MS} when it is false. */
+  timeoutMs?: number;
+  /** Abort the awaiter; the promise rejects with `signal.reason`. The command
+   *  may already be on the air — aborting drops our awaiter and frees the
+   *  per-repeater slot, it does not recall the send. */
+  signal?: AbortSignal;
+}
+
 /** Send a remote CLI command (e.g. "setperm <hex> 1", "discover.neighbors")
  *  as a text message with txt_type=CLI_DATA. The reply arrives as a normal
  *  RESP_CONTACT_MSG_RECV(_V3) with txt_type=CLI_DATA; the directMessages
- *  feature routes it back here (onCliReply) by sender prefix. */
-export async function repeaterSendCli(ctx: FeatureContext, contactKey: string, command: string): Promise<string> {
+ *  feature routes it back here (onCliReply) by sender prefix.
+ *
+ *  Only one CLI command may be outstanding per repeater — a second call
+ *  supersedes the first. Callers that need queueing own it. */
+export async function repeaterSendCli(
+  ctx: FeatureContext,
+  contactKey: string,
+  command: string,
+  opts: RepeaterCliOptions = {},
+): Promise<string> {
+  const { signal } = opts;
+  if (signal?.aborted) throw signal.reason;
   const contact = lookupRepeaterContact(ctx, contactKey);
   if (!contact.ok) throw new Error(contact.error);
+
+  const expectReply = opts.expectReply !== false;
+  const timeoutMs = opts.timeoutMs ?? (expectReply ? CLI_REPLY_TIMEOUT_MS : ADMIN_SENT_TIMEOUT_MS);
   const prefix = contact.publicKeyHex.slice(0, 12);
   const pendingCli = ctx.rt.adminCorr.pendingCli;
+
+  // Hoisted out of the executor (which runs synchronously) so the send path
+  // below can settle the promise.
+  let cleanup = (): void => {};
+  let failWait = (_err: Error): void => {};
+  let onSendState = (_state: CliSendPhase, _reason?: string): void => {};
   const wait = new Promise<string>((resolve, reject) => {
+    let entry: PendingCli | undefined;
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          expectReply ? `CLI command timed out after ${timeoutMs}ms` : `CLI send was not confirmed after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+    const onAbort = (): void => {
+      cleanup();
+      reject(signal?.reason);
+    };
+    // Drop our awaiter and timers. Deliberately does NOT touch the DM send
+    // FIFO: a RESP_SENT may still be in flight and must find its entry, or the
+    // next real DM's 'sent' event is mis-attributed to this command.
+    cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (entry && pendingCli.get(prefix) === entry) pendingCli.delete(prefix);
+    };
+    failWait = (err: Error): void => {
+      cleanup();
+      reject(err);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    // A fire-and-forget send settles on the DM send FIFO's own bookkeeping
+    // instead — it registers no awaiter, so the single per-repeater slot stays
+    // free for a command that does expect an answer. That also means nothing
+    // else can settle it: resetAdmin has no pendingCli entry to reject, so a
+    // definite failure has to arrive through here or the caller waits out the
+    // whole timeout and is told the send "was not confirmed" — which is both
+    // late and the wrong reason.
+    onSendState = (state: CliSendPhase, reason?: string): void => {
+      if (state === 'failed') {
+        failWait(new Error(reason ? `CLI send failed: ${reason}` : 'CLI send failed'));
+        return;
+      }
+      // 'ack' may still follow the resolve; resolve() is a no-op by then.
+      if (state === 'sent') {
+        cleanup();
+        resolve('');
+      }
+    };
+    if (!expectReply) return;
+
     const existing = pendingCli.get(prefix);
     if (existing) {
       clearTimeout(existing.timer);
       existing.reject(new Error('superseded by newer CLI command'));
     }
-    const timer = setTimeout(() => {
-      pendingCli.delete(prefix);
-      reject(new Error(`CLI command timed out after ${CLI_REPLY_TIMEOUT_MS}ms`));
-    }, CLI_REPLY_TIMEOUT_MS);
-    pendingCli.set(prefix, { pubKeyPrefixHex: prefix, resolve, reject, timer });
+    entry = {
+      pubKeyPrefixHex: prefix,
+      resolve: (text) => {
+        cleanup();
+        resolve(text);
+      },
+      reject: (err) => {
+        cleanup();
+        reject(err);
+      },
+      timer,
+    };
+    pendingCli.set(prefix, entry);
   });
+
   const frame = directMessages.encodeSendDmText({
     destPublicKeyHex: contact.publicKeyHex,
     text: command,
     txtType: TXT_TYPE.CLI_DATA,
   });
-  // CLI sends are still DMs at the wire level — push onto the DM send FIFO so
-  // the RESP_SENT FIFO advances correctly. The id is synthetic; the radio
-  // doesn't ack CLI sends with PUSH_SEND_CONFIRMED so we won't get a state flip.
+  // CLI sends are still DMs at the wire level — take a DM send FIFO slot so
+  // the RESP_SENT FIFO advances correctly. The id is synthetic and tagged as a
+  // CLI send, so its progress reports on `cliSendState`, not `messageState`.
   const syntheticId = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  directMessages.enqueueDmSend(ctx, syntheticId);
-  try {
-    await ctx.writeFrame(frame);
-  } catch (err) {
+  directMessages.enqueueCliSend(ctx, syntheticId, {
+    contactKey,
+    // Only a fire-and-forget send settles on the wire state; a reply-expecting
+    // one must keep waiting for the repeater's answer.
+    onState: expectReply ? undefined : onSendState,
+  });
+  // Fire the write off and hand `wait` straight back, the same shape
+  // sendTaggedReq uses. Awaiting the write here would suspend before anything
+  // has chained onto `wait`, so an abort / supersede / short timeout landing
+  // inside the write window — a BLE GATT write or serial drain is milliseconds
+  // wide — would reject a promise with no handler attached, which Node reports
+  // as an unhandled rejection (fatal under its default
+  // --unhandled-rejections=throw). The caller still sees the same rejection.
+  ctx.writeFrame(frame).catch((err) => {
+    // The radio won't reply with RESP_SENT, so pop the entry to keep the FIFO
+    // aligned, and settle `wait` with the write error.
     directMessages.dequeueDmSend(ctx, syntheticId);
-    const pending = pendingCli.get(prefix);
-    if (pending) {
-      clearTimeout(pending.timer);
-      pendingCli.delete(prefix);
-      pending.reject(err as Error);
-    }
-    throw err;
-  }
+    failWait(err as Error);
+  });
   return wait;
 }
 
