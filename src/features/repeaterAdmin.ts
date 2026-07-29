@@ -547,11 +547,16 @@ export async function repeaterSendCli(
   // below can settle the promise.
   let cleanup = (): void => {};
   let failWait = (_err: Error): void => {};
+  let onSendConfirmed = (): void => {};
   const wait = new Promise<string>((resolve, reject) => {
     let entry: PendingCli | undefined;
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`CLI command timed out after ${timeoutMs}ms`));
+      reject(
+        new Error(
+          expectReply ? `CLI command timed out after ${timeoutMs}ms` : `CLI send was not confirmed after ${timeoutMs}ms`,
+        ),
+      );
     }, timeoutMs);
     const onAbort = (): void => {
       cleanup();
@@ -570,6 +575,15 @@ export async function repeaterSendCli(
       reject(err);
     };
     signal?.addEventListener('abort', onAbort, { once: true });
+
+    // A fire-and-forget send resolves on the radio's RESP_SENT instead — it
+    // registers no awaiter, so the single per-repeater slot stays free for a
+    // command that does expect an answer.
+    onSendConfirmed = (): void => {
+      cleanup();
+      resolve('');
+    };
+    if (!expectReply) return;
 
     const existing = pendingCli.get(prefix);
     if (existing) {
@@ -600,7 +614,12 @@ export async function repeaterSendCli(
   // the RESP_SENT FIFO advances correctly. The id is synthetic and tagged as a
   // CLI send, so its progress reports on `cliSendState`, not `messageState`.
   const syntheticId = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  directMessages.enqueueCliSend(ctx, syntheticId, { contactKey });
+  directMessages.enqueueCliSend(ctx, syntheticId, {
+    contactKey,
+    // Only a fire-and-forget send settles on RESP_SENT; a reply-expecting one
+    // must keep waiting for the repeater's answer.
+    onSent: expectReply ? undefined : onSendConfirmed,
+  });
   try {
     await ctx.writeFrame(frame);
   } catch (err) {

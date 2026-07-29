@@ -647,3 +647,93 @@ describe('repeaterAdmin: repeaterSendCli options — timeout + abort', () => {
     expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
   });
 });
+
+describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
+  it('registers no pendingCli awaiter and still writes the CLI_DATA DM', async () => {
+    const { ctx, state, writes } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
+    await tick();
+
+    expect(ctx.rt.adminCorr.pendingCli.size).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0][0]).toBe(0x02); // CMD_SEND_TXT_MSG
+    expect(writes[0][1]).toBe(TXT_TYPE.CLI_DATA);
+    expect(writes[0].subarray(13).toString('utf8')).toBe('reboot');
+    expect(ctx.rt.dm.dmSendQueue).toHaveLength(1);
+
+    directMessagesFeature.handle(0x06, sentTag('00000000'), ctx);
+    await expect(p).resolves.toBe('');
+  });
+
+  it('does not consume the pendingCli slot a concurrent command needs', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const fire = repeaterSendCli(ctx, `c:${PK}`, 'clkreboot', { expectReply: false });
+    const ask = repeaterSendCli(ctx, `c:${PK}`, 'ver');
+    await tick();
+
+    expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
+
+    directMessagesFeature.handle(0x06, sentTag('00000000'), ctx); // pops the fire-and-forget
+    await expect(fire).resolves.toBe('');
+
+    directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
+    await expect(ask).resolves.toBe('v1.2.3');
+  });
+
+  it('rejects when the send is never confirmed within the timeout', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'poweroff', { expectReply: false, timeoutMs: 10 });
+    await expect(p).rejects.toThrow(/send was not confirmed after 10ms/);
+    expect(ctx.rt.adminCorr.pendingCli.size).toBe(0);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('is abortable before the send is confirmed', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+
+    const ac = new AbortController();
+    const reason = new Error('user cancelled');
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'start ota', { expectReply: false, signal: ac.signal });
+    await tick();
+    ac.abort(reason);
+
+    await expect(p).rejects.toBe(reason);
+    resetDmState(ctx, 'cleanup');
+  });
+
+  it('reports on cliSendState even after the promise has already resolved', async () => {
+    const { ctx, state, events } = makeCtx();
+    addContact(state);
+    registerAdminHooks(ctx);
+    const seen: Array<{ id: string; contactKey: string; state: string }> = [];
+    events.on('cliSendState', (e) => seen.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
+
+    const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
+    await tick();
+    directMessagesFeature.handle(0x06, sentTag('deadbeef'), ctx);
+    await expect(p).resolves.toBe('');
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ contactKey: `c:${PK}`, state: 'sent' });
+    expect(seen[0].id.startsWith('cli-')).toBe(true);
+
+    // A late ACK still reports — the stronger signal arrives after the resolve.
+    directMessagesFeature.handle(
+      0x82,
+      Buffer.concat([Buffer.from([0x82]), Buffer.from('deadbeef', 'hex'), Buffer.alloc(4)]),
+      ctx,
+    );
+    expect(seen.map((s) => s.state)).toEqual(['sent', 'ack']);
+  });
+});
