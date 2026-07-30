@@ -261,6 +261,11 @@ export class MeshCoreSession {
     repeaterAdmin.resetAdmin(this.ctx, 'session stopped');
     deviceAdmin.resetDeviceAdmin(this.ctx, 'session stopped');
     pathDiagnostics.resetPathDiagnostics(this.ctx, 'session stopped');
+    // Outgoing sends nobody has relayed yet must not survive the session:
+    // otherwise the first relay heard after a restart is credited to whatever
+    // stale entry is still sitting in the buffer.
+    this.rt.pendingChannelSends.clear();
+    this.rt.meshObs.clear();
     this.stopLivenessPoll();
   }
 
@@ -435,6 +440,10 @@ export class MeshCoreSession {
             pathHex: mesh.pathHex,
             finalSnr: parsed.snr,
             payloadFingerprint,
+            // Kept, not just hashed: relay attribution MAC-verifies and
+            // decrypts this against the channel secret to read the sender's
+            // timestamp, which identifies *which* of our sends was relayed.
+            encryptedHex: encrypted.toString('hex'),
           };
           this.rt.meshObs.record(observation);
           // If this observation is a repeater relaying one of our recent
@@ -523,6 +532,12 @@ export class MeshCoreSession {
       this.stopLivenessPoll();
       // Abandon any in-flight drain round; a reconnect's handshake starts fresh.
       resetDrain(this.ctx);
+      // Likewise for the two RX-side correlation buffers. Anything we sent
+      // before the link dropped will never be matched to a relay now, and
+      // leaving the entries behind lets them claim the first 0x88 frame heard
+      // after the reconnect.
+      this.rt.pendingChannelSends.clear();
+      this.rt.meshObs.clear();
       channels.clearPresence(this.ctx);
       this.updateSyncProgress({ ...DEFAULT_SYNC_PROGRESS });
       // Resolve any in-flight acks as failures rather than leaving callers hung.
@@ -774,23 +789,34 @@ export class MeshCoreSession {
 
   /** Track an outgoing channel send so heard repeater relays (0x88) are
    *  attributed back to it (emits 'messagePathHeard'). Call after sendChannelText
-   *  returns a channelHash, passing your message id. */
-  registerChannelSend(params: { messageId: string; channelHash: number; sentAt?: number }): void {
+   *  returns, passing your message id along with the `channelHash` and
+   *  `timestampUnix` it handed back.
+   *
+   *  Passing `timestampUnix` is strongly recommended: the firmware encrypts it
+   *  into the packet, so it identifies the exact send a relay belongs to.
+   *  Without it, attribution falls back to a heuristic that cannot reliably
+   *  tell two sends on the same channel apart. */
+  registerChannelSend(params: { messageId: string; channelHash: number; sentAt?: number; timestampUnix?: number }): void {
     this.rt.pendingChannelSends.register({
       messageId: params.messageId,
       channelHash: params.channelHash,
       sentAt: params.sentAt ?? Date.now(),
+      timestampUnix: params.timestampUnix,
     });
   }
 
   // ---- Messaging ---------------------------------------------------------
 
   /** Returns ok on transport-level write success. When ok, `channelHash` is
-   *  the byte the firmware tags GRP_TXT packets with on this channel — the
-   *  caller uses it to register a pending-send entry so subsequent
-   *  PUSH_CODE_LOG_RX_DATA observations matching that byte can be attributed
-   *  back to the outgoing message (repeater relays we hear over the air). */
-  async sendChannelText(channelKey: string, text: string): Promise<{ ok: boolean; error?: string; channelHash?: number }> {
+   *  the byte the firmware tags GRP_TXT packets with on this channel and
+   *  `timestampUnix` is the timestamp encrypted into the outgoing packet.
+   *  Pass both to `registerChannelSend` so subsequent PUSH_CODE_LOG_RX_DATA
+   *  observations can be attributed back to this message (repeater relays we
+   *  hear over the air). */
+  async sendChannelText(
+    channelKey: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string; channelHash?: number; timestampUnix?: number }> {
     return channelMessages.sendChannelText(this.ctx, channelKey, text);
   }
 

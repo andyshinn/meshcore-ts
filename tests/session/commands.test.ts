@@ -4,6 +4,7 @@ import { channelHashOf } from '../../src/model/paths';
 import type { Channel } from '../../src/model/types';
 import { LoopbackTransport } from '../../src/ports/transport';
 import { MeshCoreSession } from '../../src/session/session';
+import { encryptGrpTxt } from '../support/grpTxt';
 
 // A known channel with an explicit slot index so sendChannelText can address it.
 const channel: Channel = {
@@ -22,11 +23,11 @@ const RESP_OK = Uint8Array.from([0x00]);
  *    [0x88][snr*4 i8][rssi i8][header][path_len][path 1B][channel_hash][cipher…]
  *  header = (GRP_TXT=0x05 << 2) | FLOOD(0x01); path_len = 1 (hashCount=1,
  *  hashSize=1). hashCount must be ≥1 so the pending-send matcher accepts it. */
-function logRxGrpTxtFrame(channelHash: number): Uint8Array {
+function logRxGrpTxtFrame(channelHash: number, cipherHex = 'deadbeef'): Uint8Array {
   const header = (0x05 << 2) | 0x01; // GRP_TXT, FLOOD route
   const pathLen = 0x01; // hashCount=1, hashSize=1
   const pathByte = 0xaa; // one repeater hop prefix
-  const cipher = Buffer.from('deadbeef', 'hex'); // opaque encrypted body
+  const cipher = Buffer.from(cipherHex, 'hex'); // encrypted body ([MAC][ciphertext])
   const mesh = Buffer.concat([Buffer.from([header, pathLen, pathByte, channelHash]), cipher]);
   const frame = Buffer.concat([Buffer.from([0x88, 16, -40 & 0xff]), mesh]);
   return Uint8Array.from(frame);
@@ -66,6 +67,9 @@ describe('MeshCoreSession command surface', () => {
       expect(frame.subarray(7).toString('utf8')).toBe('hi there');
       // The returned channelHash matches the channel's derived hash byte.
       expect(result.channelHash).toBe(channelHashOf(channel));
+      // The timestamp actually written into the frame comes back, so the
+      // caller can register it and get timestamp-accurate relay attribution.
+      expect(result.timestampUnix).toBe(frame.readUInt32LE(3));
     });
 
     it('fails cleanly when the channel slot is unknown', async () => {
@@ -153,6 +157,81 @@ describe('MeshCoreSession command surface', () => {
       expect(heard).toHaveLength(1);
       expect(heard[0].id).toBe(messageId);
       expect(heard[0].path.id).toMatch(/^[0-9a-f]{16}$/);
+    });
+
+    it('credits a relay to the send carrying that plaintext timestamp', () => {
+      // End-to-end tier-2 path: the channel secret is known, so the session
+      // MAC-verifies and decrypts the observed packet and matches on the
+      // timestamp inside it rather than on arrival order.
+      session.state.setChannels([channel]);
+      const channelHash = channelHashOf(channel) as number;
+
+      // m1 goes out and is never relayed; m2 follows on the same channel.
+      session.registerChannelSend({ messageId: 'm1', channelHash, timestampUnix: 1_768_616_501 });
+      session.registerChannelSend({ messageId: 'm2', channelHash, timestampUnix: 1_768_616_502 });
+
+      const heard: string[] = [];
+      session.events.on('messagePathHeard', (p) => heard.push(p.id));
+
+      const relay = encryptGrpTxt(channel.secretHex as string, {
+        timestampUnix: 1_768_616_502,
+        body: 'Me: second message',
+      });
+      transport.receive(logRxGrpTxtFrame(channelHash, relay));
+
+      expect(heard).toEqual(['m2']);
+    });
+
+    it("ignores a stranger's message on a channel we can decrypt", () => {
+      session.state.setChannels([channel]);
+      const channelHash = channelHashOf(channel) as number;
+      session.registerChannelSend({ messageId: 'm1', channelHash, timestampUnix: 1_768_616_501 });
+
+      const heard: string[] = [];
+      session.events.on('messagePathHeard', (p) => heard.push(p.id));
+
+      const stranger = encryptGrpTxt(channel.secretHex as string, {
+        timestampUnix: 1_768_616_777,
+        body: 'Bob: not ours',
+      });
+      transport.receive(logRxGrpTxtFrame(channelHash, stranger));
+
+      expect(heard).toEqual([]);
+    });
+  });
+
+  describe('pending channel sends across the session lifecycle', () => {
+    it('drops pending sends on stop so they cannot claim a relay later', () => {
+      const channelHash = channelHashOf(channel) as number;
+      session.registerChannelSend({ messageId: 'm1', channelHash });
+      expect(session.rt.pendingChannelSends.size()).toBe(1);
+
+      session.stop();
+
+      expect(session.rt.pendingChannelSends.size()).toBe(0);
+    });
+
+    it('drops pending sends on disconnect so a reconnect starts clean', () => {
+      const channelHash = channelHashOf(channel) as number;
+      session.registerChannelSend({ messageId: 'm1', channelHash });
+
+      transport.setState('idle');
+
+      expect(session.rt.pendingChannelSends.size()).toBe(0);
+    });
+
+    it('does not attribute the first relay after a reconnect to a stale send', () => {
+      const channelHash = channelHashOf(channel) as number;
+      session.registerChannelSend({ messageId: 'stale', channelHash });
+
+      const heard: string[] = [];
+      session.events.on('messagePathHeard', (p) => heard.push(p.id));
+
+      transport.setState('idle');
+      transport.setState('connected');
+      transport.receive(logRxGrpTxtFrame(channelHash));
+
+      expect(heard).toEqual([]);
     });
   });
 });

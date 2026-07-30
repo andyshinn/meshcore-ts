@@ -83,15 +83,19 @@ await session.sendDmText('c:<pubkeyhex>', 'hello', 'msg-1');
 // 'sending' → 'sent' (RESP_SENT) → 'ack' (PUSH_SEND_CONFIRMED), surfaced via 'messageState'.
 
 // Send to a channel:
-const { ok, channelHash } = await session.sendChannelText('ch:General', 'hi all');
+const { ok, channelHash, timestampUnix } = await session.sendChannelText('ch:General', 'hi all');
 // To learn which repeaters relayed your send back over the air, do BOTH:
 //   1. listen for 'messagePathHeard' — it carries { id, path }, and
 //   2. register the send so heard 0x88 relays correlate to your message id.
 // Registering alone surfaces nothing; the path arrives only via the event.
+// Pass timestampUnix too: it is encrypted into the packet, so a heard relay can
+// be tied to this exact send rather than guessed at by arrival order.
 session.events.on('messagePathHeard', ({ id, path }) => {
   console.log(`message ${id} was relayed via`, path);
 });
-if (ok && channelHash != null) session.registerChannelSend({ messageId: 'msg-2', channelHash });
+if (ok && channelHash != null) {
+  session.registerChannelSend({ messageId: 'msg-2', channelHash, timestampUnix });
+}
 ```
 
 ### Implementing a real transport (sketch)
