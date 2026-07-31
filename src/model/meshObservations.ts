@@ -32,6 +32,14 @@ export interface MeshObservation {
    *  lookup can also disambiguate when two channel msgs collide in the same
    *  window with the same hop count. */
   payloadFingerprint: string;
+  /** The encrypted payload bytes themselves — `[MAC 2B][ciphertext]`, i.e.
+   *  everything after the channel_hash byte — as hex. Retained so relay
+   *  attribution can MAC-verify and decrypt the packet against a known channel
+   *  secret and read the sender's timestamp out of the plaintext, which is a
+   *  far stronger identity than the fingerprint alone. Optional: observations
+   *  synthesized by consumers may omit it, and attribution degrades to
+   *  fingerprint heuristics when it is absent. */
+  encryptedHex?: string;
 }
 
 export class MeshObservations {

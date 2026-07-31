@@ -3,6 +3,7 @@
 // NOTE: paths.ts is intentionally excluded (it is model-layer, not codec).
 export * from './protocol/advert';
 export * from './protocol/buffer';
+export * from './protocol/channelCrypto';
 export * from './protocol/codes';
 export * from './protocol/encode';
 export * from './protocol/frame';

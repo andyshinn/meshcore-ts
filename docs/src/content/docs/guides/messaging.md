@@ -30,7 +30,7 @@ await session.sendDmTextWithRetry('c:<pubkeyhex>', 'are you there?', 'msg-2');
 ## Channel messages
 
 ```ts
-const { ok, channelHash } = await session.sendChannelText('ch:General', 'hi all');
+const { ok, channelHash, timestampUnix } = await session.sendChannelText('ch:General', 'hi all');
 ```
 
 Optionally attribute heard repeater relays back to your message — this emits the
@@ -38,9 +38,16 @@ Optionally attribute heard repeater relays back to your message — this emits t
 
 ```ts
 if (ok && channelHash != null) {
-  session.registerChannelSend({ messageId: 'msg-3', channelHash });
+  session.registerChannelSend({ messageId: 'msg-3', channelHash, timestampUnix });
 }
 ```
+
+Pass `timestampUnix` whenever you have it. The radio encrypts that timestamp into
+the outgoing packet, so when a relay is heard back the library can decrypt it with
+the channel secret and prove which send it belongs to. Omit it and attribution
+falls back to a heuristic that cannot reliably tell two sends on the same channel
+apart — send twice inside the retention window and relays of the second message
+may be credited to the first.
 
 ## Reading message history
 

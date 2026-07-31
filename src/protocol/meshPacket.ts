@@ -51,8 +51,10 @@ export interface MeshPacketHeader {
   /** Hex path bytes (hashCount × hashSize). Empty string when hashCount=0. */
   pathHex: string;
   transportCodesHex?: string;
-  /** Decrypted-or-not body. For GRP_TXT, format is:
-   *    [channel_hash 1B][MAC 2B][encrypted: ts u32 LE + "name: text"] */
+  /** Still-encrypted body. For GRP_TXT, format is:
+   *    [channel_hash 1B][MAC 2B][ciphertext N*16B]
+   *  where the ciphertext decrypts to [ts u32 LE][flags 1B]["name: text"].
+   *  See protocol/channelCrypto.ts to verify and decrypt it. */
   payload: Buffer;
 }
 

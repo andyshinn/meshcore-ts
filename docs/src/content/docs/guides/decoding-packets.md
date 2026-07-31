@@ -30,7 +30,8 @@ session.events.on('rawPacket', (pkt) => {
 `decodeOnAirPacket` structurally decodes those bytes into a tagged union. It
 performs **no decryption** (cipher bodies are reported only as a length) and
 **never throws** — unparseable or unsupported input yields the `raw` fallback
-variant.
+variant. To read the body of a channel packet you hold the key for, see
+[Decrypting a channel payload](#decrypting-a-channel-payload) below.
 
 ```ts
 import { Protocol } from '@andyshinn/meshcore-ts';
@@ -70,6 +71,54 @@ session.events.on('rawPacket', (pkt) => {
 
 See `OnAirPacket` and `OnAirPayload` in the [API reference](../../api/readme/)
 for every field of every variant.
+
+## Decrypting a channel payload
+
+`decodeOnAirPacket` deliberately stops at the cipher boundary, so a `grpTxt`
+payload gives you `channelHash`, `macHex`, and `cipherLen` — not the body. When
+you hold the channel's secret you can go the rest of the way with
+`Protocol.decryptGrpTxt`, which verifies the packet's 2-byte MAC and decrypts
+the body:
+
+```ts
+import { Buffer } from 'node:buffer';
+import { Protocol } from '@andyshinn/meshcore-ts';
+
+const mesh = Protocol.parseMeshPacket(Buffer.from(pkt.hex, 'hex'));
+if (mesh?.payloadType === Protocol.PAYLOAD_TYPE.GRP_TXT) {
+  // GRP_TXT payload is [channel_hash 1B][MAC 2B][ciphertext] — skip the hash
+  // byte and hand over the rest.
+  const plain = Protocol.decryptGrpTxt(channel.secretHex, mesh.payload.subarray(1));
+  if (plain) {
+    console.log(plain.timestampUnix, plain.body); // body keeps its "name: " prefix
+  }
+}
+```
+
+`parseMeshPacket` rather than `decodeOnAirPacket` here, because only the former
+hands back the payload bytes the decrypt needs.
+
+A `null` return means "not this channel": either the payload is malformed, or
+the MAC did not verify under that secret. The channel hash is a single byte, so
+roughly one packet in 256 from a channel you cannot read will still carry your
+channel's hash — the MAC is what tells the two apart. Try each secret you hold
+and let the MAC pick:
+
+```ts
+const match = channels
+  .map((c) => c.secretHex && Protocol.decryptGrpTxt(c.secretHex, mesh.payload.subarray(1)))
+  .find(Boolean);
+```
+
+Note that two bytes of MAC is a weak authenticator — about a 1-in-65536 false
+accept on random data. It is ample for telling channels apart, but do not treat
+a successful decrypt as proof of authorship.
+
+`decryptGrpTxt` returns `{ timestampUnix, flags, body }`. The timestamp is the
+one the *originating* node stamped into the packet, which is what makes it a
+reliable identity for a message: it is also how the session decides which of
+your own sends a heard repeater relay belongs to (see
+[Messaging](../messaging/#channel-messages)).
 
 ## A note on the two sources
 

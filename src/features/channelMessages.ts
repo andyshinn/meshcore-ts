@@ -118,15 +118,20 @@ function splitSenderPrefix(body: string): { senderName: string | null; cleanBody
 // ---- Send --------------------------------------------------------------
 
 /** Returns ok on transport-level write success. When ok, `channelHash` is
- *  the byte the firmware tags GRP_TXT packets with on this channel — the
- *  caller uses it to register a pending-send entry so subsequent
- *  PUSH_CODE_LOG_RX_DATA observations matching that byte can be attributed
- *  back to the outgoing message (repeater relays we hear over the air). */
+ *  the byte the firmware tags GRP_TXT packets with on this channel and
+ *  `timestampUnix` is the timestamp written into the packet — the caller uses
+ *  both to register a pending-send entry so subsequent
+ *  PUSH_CODE_LOG_RX_DATA observations can be attributed back to the outgoing
+ *  message (repeater relays we hear over the air).
+ *
+ *  The timestamp is the useful half: the firmware encrypts it into the GRP_TXT
+ *  body, so hearing it come back proves the relay is of *this* send and not of
+ *  another message on the same channel. */
 export async function sendChannelText(
   ctx: FeatureContext,
   channelKey: string,
   text: string,
-): Promise<{ ok: boolean; error?: string; channelHash?: number }> {
+): Promise<{ ok: boolean; error?: string; channelHash?: number; timestampUnix?: number }> {
   const channel = ctx.state.getChannels().find((c) => c.key === channelKey);
   if (!channel) return { ok: false, error: `unknown channel ${channelKey}` };
   const idx = channel.idx ?? channels.findIdxByKey(ctx, channelKey);
@@ -134,11 +139,14 @@ export async function sendChannelText(
     return { ok: false, error: `no slot index known for ${channelKey}` };
   }
 
-  const frame = encodeSendChannelText({ channelIdx: idx, text });
+  // Pinned here rather than left to the encoder's default so the exact value
+  // that goes on the air is the one we hand back to the caller.
+  const timestampUnix = Math.floor(Date.now() / 1000);
+  const frame = encodeSendChannelText({ channelIdx: idx, text, timestampUnix });
   try {
     await ctx.writeFrame(frame);
     const channelHash = channelHashOf(channel) ?? undefined;
-    return { ok: true, channelHash };
+    return { ok: true, channelHash, timestampUnix };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
