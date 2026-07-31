@@ -104,6 +104,9 @@ cancellation, and fire-and-forget commands._
 
 ## 0.4.1
 
+_Tagged `v0.4.1` but never published to npm — no GitHub Release was cut, so the
+publish workflow never ran. Shipped as part of 0.5.0._
+
 ### Fixed
 
 - **`repeaterLogin` mislabelled a direct neighbour as flood.** The `effective`
