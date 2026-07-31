@@ -31,7 +31,8 @@
 //    registered without a timestamp. Entries already locked onto a ciphertext
 //    are matched first, so a stale unclaimed entry can never shadow a
 //    correctly-locked newer one; only then may an unclaimed entry claim a new
-//    ciphertext, newest-first and never for an observation that predates it.
+//    ciphertext — the one with the newest `sentAt`, and never for an
+//    observation that predates it.
 //
 // The ordering matters and the *fallback* is genuinely a guess: two sends on
 // one channel where only the second is relayed are indistinguishable without
@@ -115,24 +116,35 @@ export class PendingChannelSends {
    *  no pending send matches. Must be called for every recorded mesh
    *  observation.
    *
-   *  `channelSecretHex` is the secret for the channel `obs.channelHash` refers
-   *  to, when we know one. Supplying it enables the authoritative
-   *  timestamp match described at the top of this file; omitting it falls back
-   *  to the fingerprint heuristic. */
-  matchObservation(obs: MeshObservation, channelSecretHex?: string | null): { messageId: string } | null {
+   *  `channelSecrets` holds every secret a channel with `obs.channelHash`
+   *  could be using. The channel hash is a single byte, so two configured
+   *  channels collide on it about once in 256 — pass all of them and let the
+   *  MAC pick. Supplying secrets enables the authoritative timestamp match
+   *  described at the top of this file; omitting them falls back to the
+   *  fingerprint heuristic. */
+  matchObservation(obs: MeshObservation, channelSecrets?: string | readonly string[] | null): { messageId: string } | null {
     if (obs.hashCount === 0) return null;
     this.evict(obs.recordedAt);
 
     const candidates = this.pending.filter((entry) => entry.channelHash === obs.channelHash);
     if (candidates.length === 0) return null;
 
+    const secrets = typeof channelSecrets === 'string' ? [channelSecrets] : (channelSecrets ?? []);
     let pool = candidates;
-    if (channelSecretHex && obs.encryptedHex) {
-      const plain = decryptGrpTxt(channelSecretHex, Buffer.from(obs.encryptedHex, 'hex'));
-      // MAC failed: this packet is not on our channel at all, just a colliding
-      // channel-hash byte from a channel we cannot read. It must not claim an
-      // entry, and — just as importantly — must not poison one by locking a
-      // stranger's ciphertext onto it.
+    if (secrets.length > 0 && obs.encryptedHex) {
+      const encrypted = Buffer.from(obs.encryptedHex, 'hex');
+      // First secret whose MAC verifies identifies the channel. Trying only one
+      // would drop our own relay whenever a different configured channel
+      // happened to be checked first.
+      let plain = null;
+      for (const secret of secrets) {
+        plain = decryptGrpTxt(secret, encrypted);
+        if (plain) break;
+      }
+      // No secret verified: this packet is not on any channel we can read, just
+      // a colliding channel-hash byte. It must not claim an entry, and — just
+      // as importantly — must not poison one by locking a stranger's ciphertext
+      // onto it.
       if (!plain) return null;
 
       const sameTs = candidates.filter((entry) => entry.timestampUnix === plain.timestampUnix);
@@ -158,12 +170,19 @@ export class PendingChannelSends {
     // Otherwise the newest unclaimed send that could causally have produced it
     // takes it. An observation recorded before the send went out cannot be a
     // relay of that send.
-    for (let i = pool.length - 1; i >= 0; i -= 1) {
-      const entry = pool[i];
+    //
+    // "Newest" means newest by `sentAt`, not last in the buffer: `sentAt` is
+    // caller-supplied, so registration order need not be send order. Ties fall
+    // to the later registration.
+    let newest: PendingSend | null = null;
+    for (const entry of pool) {
       if (entry.fingerprint !== null) continue;
       if (obs.recordedAt < entry.sentAt) continue;
-      entry.fingerprint = obs.payloadFingerprint;
-      return { messageId: entry.messageId };
+      if (newest === null || entry.sentAt >= newest.sentAt) newest = entry;
+    }
+    if (newest) {
+      newest.fingerprint = obs.payloadFingerprint;
+      return { messageId: newest.messageId };
     }
     return null;
   }
@@ -179,7 +198,7 @@ export class PendingChannelSends {
    *  for the owner name used to label the synthesized path origin, and for the
    *  channel secret that enables timestamp-accurate attribution. */
   attributeObservation(obs: MeshObservation, state: SessionState, events: MeshCoreEvents): boolean {
-    const match = this.matchObservation(obs, secretForChannelHash(state, obs.channelHash));
+    const match = this.matchObservation(obs, secretsForChannelHash(state, obs.channelHash));
     if (!match) return false;
     const owner = state.getOwner();
     // Repeater relays don't carry the original sender name in the 0x88 frame;
@@ -199,12 +218,17 @@ export class PendingChannelSends {
   }
 }
 
-/** The secret of the known channel whose hash byte is `channelHash`, or null.
- *  The hash is one byte, so two configured channels can collide here; the MAC
- *  check inside the match sorts that out by rejecting the wrong secret. */
-function secretForChannelHash(state: SessionState, channelHash: number): string | null {
+/** Secrets of every known channel whose hash byte is `channelHash`.
+ *
+ *  Returns all of them, not the first: the hash is a single byte, so two
+ *  configured channels collide on it roughly once in 256 (about a 38% chance
+ *  that some pair does, across a full 16 slots). Returning only the first would
+ *  hand the match a secret whose MAC cannot verify and silently drop a relay of
+ *  our own send on the other channel. The MAC picks the right one. */
+function secretsForChannelHash(state: SessionState, channelHash: number): string[] {
+  const secrets: string[] = [];
   for (const channel of state.getChannels()) {
-    if (channel.secretHex && channelHashOf(channel) === channelHash) return channel.secretHex;
+    if (channel.secretHex && channelHashOf(channel) === channelHash) secrets.push(channel.secretHex);
   }
-  return null;
+  return secrets;
 }

@@ -256,6 +256,78 @@ describe('PendingChannelSends — plaintext-timestamp attribution', () => {
     sends.register({ messageId: 'm1', channelHash: CH, sentAt: 1_000, timestampUnix: TS_M1 });
     expect(sends.matchObservation(relayObs({ timestampUnix: TS_M1 }))).toEqual({ messageId: 'm1' });
   });
+
+  it('accepts the relay when only the second candidate secret verifies', () => {
+    // Two configured channels can collide on the 1-byte hash. Stopping at the
+    // first secret whose MAC fails would silently drop our own relay.
+    const sends = new PendingChannelSends();
+    sends.register({ messageId: 'm1', channelHash: CH, sentAt: 1_000, timestampUnix: TS_M1 });
+    const relay = relayObs({ timestampUnix: TS_M1 });
+    expect(sends.matchObservation(relay, [OTHER_SECRET, SECRET])).toEqual({ messageId: 'm1' });
+  });
+
+  it('rejects the packet when no candidate secret verifies', () => {
+    const sends = new PendingChannelSends();
+    sends.register({ messageId: 'm1', channelHash: CH, sentAt: 1_000, timestampUnix: TS_M1 });
+    const foreign = relayObs({ timestampUnix: TS_M1, secretHex: channelSecretFor('#third') });
+    expect(sends.matchObservation(foreign, [OTHER_SECRET, SECRET])).toBeNull();
+  });
+});
+
+describe('PendingChannelSends — heuristic picks the newest send by sentAt', () => {
+  it('prefers the later sentAt even when it was registered first', () => {
+    // `sentAt` is caller-supplied, so registration order is not necessarily
+    // send order. "Newest first" has to mean newest by sentAt, not by
+    // position in the buffer.
+    const sends = new PendingChannelSends();
+    sends.register({ messageId: 'm-new', channelHash: 0x42, sentAt: 9_000 });
+    sends.register({ messageId: 'm-old', channelHash: 0x42, sentAt: 5_000 });
+    expect(sends.matchObservation(obs({ recordedAt: 10_000, payloadFingerprint: 'fp-x' }))).toEqual({
+      messageId: 'm-new',
+    });
+  });
+});
+
+describe('PendingChannelSends.attributeObservation — colliding channel hashes', () => {
+  // '#ch8' and '#ch14' really do collide on the 1-byte channel hash (0xfb).
+  // With 16 channel slots configured there is a ~38% chance some pair does.
+  const NAME_A = '#ch8';
+  const NAME_B = '#ch14';
+  const SECRET_A = channelSecretFor(NAME_A);
+  const SECRET_B = channelSecretFor(NAME_B);
+  const TS = 1_768_616_501;
+
+  it('the two fixture channels share a channel hash byte', () => {
+    expect(channelHashFor(SECRET_A)).toBe(channelHashFor(SECRET_B));
+  });
+
+  it('attributes a relay on the second channel even though the first is found first', () => {
+    const sends = new PendingChannelSends();
+    const state = new SessionState();
+    const events = new MeshCoreEvents();
+    // Order matters: A is what a first-match secret lookup returns, but the
+    // send went out on B, so A's MAC will fail.
+    state.setChannels([
+      { key: `ch:${NAME_A}`, name: NAME_A, kind: 'hashtag', secretHex: SECRET_A },
+      { key: `ch:${NAME_B}`, name: NAME_B, kind: 'hashtag', secretHex: SECRET_B },
+    ]);
+    const collidingHash = channelHashFor(SECRET_B);
+    sends.register({ messageId: 'm1', channelHash: collidingHash, sentAt: 1_000, timestampUnix: TS });
+
+    const heard: string[] = [];
+    events.on('messagePathHeard', (p) => heard.push(p.id));
+
+    const encryptedHex = encryptGrpTxt(SECRET_B, { timestampUnix: TS, body: 'Me: hi' });
+    const relay = obs({
+      channelHash: collidingHash,
+      recordedAt: 3_000,
+      encryptedHex,
+      payloadFingerprint: createHash('sha1').update(Buffer.from(encryptedHex, 'hex')).digest('hex').slice(0, 16),
+    });
+
+    expect(sends.attributeObservation(relay, state, events)).toBe(true);
+    expect(heard).toEqual(['m1']);
+  });
 });
 
 describe('PendingChannelSends.attributeObservation', () => {

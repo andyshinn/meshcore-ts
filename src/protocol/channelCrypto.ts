@@ -5,7 +5,7 @@
 //
 //   payload    = [channel_hash 1B][MAC 2B][ciphertext N*16B]
 //   ciphertext = AES-128-ECB(secret, plaintext zero-padded to 16B blocks)
-//   MAC        = HMAC-SHA256(secret, ciphertext)[0..2]
+//   MAC        = first 2 bytes of HMAC-SHA256(secret, ciphertext)
 //   plaintext  = [timestamp u32 LE][flags 1B][body UTF-8]
 //
 // `body` still carries the originating node's "name: " prefix — the firmware
