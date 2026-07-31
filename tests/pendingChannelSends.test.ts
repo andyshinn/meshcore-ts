@@ -244,7 +244,7 @@ describe('PendingChannelSends — plaintext-timestamp attribution', () => {
   });
 
   it('falls back to the heuristic for a send registered without a timestamp', () => {
-    // Consumers still on the pre-0.5.1 registerChannelSend signature keep the
+    // Consumers still on the pre-0.6.0 registerChannelSend signature keep the
     // old (weaker) behavior rather than losing relay chips entirely.
     const sends = new PendingChannelSends();
     sends.register({ messageId: 'm1', channelHash: CH, sentAt: 1_000 });

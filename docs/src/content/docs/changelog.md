@@ -7,7 +7,7 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
-## 0.5.1
+## 0.6.0
 
 _Heard repeater relays are attributed to the send they actually belong to._
 
@@ -48,6 +48,71 @@ _Heard repeater relays are attributed to the send they actually belong to._
   packets from a foreign channel whose one-byte hash collides with yours.
   Existing callers that omit it keep the previous (improved) heuristic
   behaviour.
+
+## 0.5.0
+
+_A repeater CLI console API: its own send-state events, per-call timeouts,
+cancellation, and fire-and-forget commands._
+
+### Added
+
+- **`cliSendState` event.** A repeater CLI command travels as a direct message
+  on the wire but is not conversation traffic, so it no longer lands in the
+  message store. Its lifecycle surfaces on `cliSendState`
+  (`{ id, contactKey, state }`) instead.
+- **`cliUnmatched` event.** A CLI reply that arrives with no awaiter waiting for
+  it — a late answer, or one the console already gave up on — is emitted as
+  `cliUnmatched` (`{ contactKey, body }`) rather than dropped or forced into the
+  message store.
+- **`repeaterSendCli(contactKey, command, opts)` options:**
+  - `timeoutMs` — per-call override of the wait.
+  - `signal` — an `AbortSignal`; the promise rejects with `signal.reason`. The
+    command may already be on the air, so aborting drops our awaiter and frees
+    the per-repeater slot, it does not recall the send.
+  - `expectReply: false` — for commands the firmware never answers (`reboot`,
+    `poweroff`, `clkreboot`, `start ota`): the handler reboots or powers down
+    instead of writing a reply, and the firmware only transmits one when the
+    reply is non-empty. Such a send registers no awaiter, resolves `''` as soon
+    as the radio confirms the send, and rejects as soon as the send definitively
+    fails. Its timer bounds that confirmation rather than a reply, so the
+    default drops from `CLI_REPLY_TIMEOUT_MS` to the much shorter
+    `ADMIN_SENT_TIMEOUT_MS`.
+- **Timeout defaults exported on `Models`:** `CLI_REPLY_TIMEOUT_MS` (30s),
+  `ADMIN_REPLY_TIMEOUT_MS` (20s), `ADMIN_SENT_TIMEOUT_MS` (5s).
+
+### Changed
+
+- **CLI sends no longer emit `messageState` or enter the message store.**
+  Consumers driving a repeater console listen on `cliSendState`; anything that
+  correlated CLI traffic through `messageState` has to move.
+
+### Fixed
+
+- **Unhandled rejection when a CLI send was aborted mid-write.**
+  `repeaterSendCli` awaited `ctx.writeFrame` before anything was attached to its
+  wait promise, so an abort, supersede, or short timeout landing inside that
+  window rejected a promise nobody was holding — fatal in the consumer's process
+  under Node's default `--unhandled-rejections=throw`, and not catchable by the
+  caller, since the rejection was detected before `return wait` ever chained it.
+  The headline case is a console user clicking Cancel while a BLE GATT write
+  drains. The write is now fired off and the wait returned in the same
+  synchronous turn.
+- **Fire-and-forget sends reported the wrong failure reason.** A send with
+  `expectReply: false` registers no pending entry, so a disconnect or a radio
+  rejection left it pending until its timeout, which then blamed "send was not
+  confirmed" rather than what actually happened.
+
+## 0.4.1
+
+### Fixed
+
+- **`repeaterLogin` mislabelled a direct neighbour as flood.** The `effective`
+  label derived reachability from `outPathHex`, so a known 0-hop route (empty
+  `out_path`, but `out_path_len != 0xFF`) read as flood. The label now derives
+  from `contact.hops`, matching meshcore_py: undefined (`out_path_len` `0xFF`,
+  py's `-1`) is the only flood case, `0` is direct, and `>= 1` is a routed path.
+  `sendAnonReq`'s zero-hop-direct routing already mirrored meshcore_py and is
+  unchanged.
 
 ### Changed
 
