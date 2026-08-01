@@ -41,7 +41,12 @@ const STATE_RANK: Record<MessageState, number> = {
  *  events port and NEVER persists — features mutate this and emit separately. */
 export class SessionState {
   private channels: Channel[] = [];
-  private contacts: Contact[] = [];
+  private contactsByKey = new Map<string, Contact>();
+  /** Materialized `contactsByKey` values, rebuilt on demand and nulled by every
+   *  mutator. Invalidation MUST allocate a new array rather than mutate this
+   *  one: callers hold the returned reference as a stable snapshot (the
+   *  END_OF_CONTACTS prune loop iterates it while calling removeContact). */
+  private contactsArray: Contact[] | null = null;
   private owner: Owner | null = null;
   private radioSettings: RadioSettings = { ...DEFAULT_RADIO_SETTINGS };
   private deviceInfo: DeviceInfo = { ...DEFAULT_DEVICE_INFO };
@@ -76,17 +81,23 @@ export class SessionState {
   // ----- Contacts -----
 
   getContacts(): Contact[] {
-    return this.contacts;
+    this.contactsArray ??= [...this.contactsByKey.values()];
+    return this.contactsArray;
+  }
+  /** O(1) lookup by contact key (`c:<pubkey>`). Null when absent. */
+  getContact(key: string): Contact | null {
+    return this.contactsByKey.get(key) ?? null;
   }
   setContacts(next: Contact[]): void {
-    this.contacts = next;
+    this.contactsByKey = new Map(next.map((c) => [c.key, c]));
+    this.contactsArray = null;
   }
   upsertContact(contact: Contact): void {
-    const idx = this.contacts.findIndex((c) => c.key === contact.key);
-    this.contacts = idx === -1 ? [...this.contacts, contact] : this.contacts.map((c, i) => (i === idx ? contact : c));
+    this.contactsByKey.set(contact.key, contact);
+    this.contactsArray = null;
   }
   removeContact(key: string): void {
-    this.contacts = this.contacts.filter((c) => c.key !== key);
+    if (this.contactsByKey.delete(key)) this.contactsArray = null;
   }
 
   // ----- Scalars -----

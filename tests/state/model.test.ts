@@ -300,3 +300,65 @@ describe('SessionState discovered pool delegation', () => {
     expect(s.getDiscovered('aa'.repeat(32))?.on_radio).toBe(0);
   });
 });
+
+describe('SessionState contacts: Map-backed with a memoized array', () => {
+  const c = (key: string, name = key): Contact => ({
+    key,
+    publicKeyHex: key.slice(2),
+    name,
+    kind: 'chat',
+  });
+
+  it('getContact returns the contact by key, or null when absent', () => {
+    const s = new SessionState();
+    s.upsertContact(c('c:aa', 'Alice'));
+    expect(s.getContact('c:aa')?.name).toBe('Alice');
+    expect(s.getContact('c:zz')).toBeNull();
+  });
+
+  it('upsert appends new keys and replaces in place, preserving order', () => {
+    const s = new SessionState();
+    s.upsertContact(c('c:aa'));
+    s.upsertContact(c('c:bb'));
+    s.upsertContact(c('c:aa', 'Renamed'));
+    expect(s.getContacts().map((x) => x.key)).toEqual(['c:aa', 'c:bb']);
+    expect(s.getContacts()[0].name).toBe('Renamed');
+  });
+
+  it('returns the same array reference until a mutation invalidates it', () => {
+    const s = new SessionState();
+    s.upsertContact(c('c:aa'));
+    const first = s.getContacts();
+    expect(s.getContacts()).toBe(first);
+    s.upsertContact(c('c:bb'));
+    expect(s.getContacts()).not.toBe(first);
+  });
+
+  it('a previously returned array stays a valid pre-removal snapshot', () => {
+    // The END_OF_CONTACTS prune loop iterates getContacts() while calling
+    // removeContact, so invalidation must allocate a new array, never mutate.
+    const s = new SessionState();
+    s.upsertContact(c('c:aa'));
+    s.upsertContact(c('c:bb'));
+    const snapshot = s.getContacts();
+    s.removeContact('c:aa');
+    expect(snapshot.map((x) => x.key)).toEqual(['c:aa', 'c:bb']);
+    expect(s.getContacts().map((x) => x.key)).toEqual(['c:bb']);
+  });
+
+  it('removing an absent key leaves the memo intact', () => {
+    const s = new SessionState();
+    s.upsertContact(c('c:aa'));
+    const first = s.getContacts();
+    s.removeContact('c:nope');
+    expect(s.getContacts()).toBe(first);
+  });
+
+  it('setContacts replaces the whole collection', () => {
+    const s = new SessionState();
+    s.upsertContact(c('c:aa'));
+    s.setContacts([c('c:xx'), c('c:yy')]);
+    expect(s.getContacts().map((x) => x.key)).toEqual(['c:xx', 'c:yy']);
+    expect(s.getContact('c:aa')).toBeNull();
+  });
+});
