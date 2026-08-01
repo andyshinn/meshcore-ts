@@ -193,3 +193,51 @@ describe('DiscoveredStore.remove / clearDiscoveredOnly', () => {
     expect(store.get('bb'.repeat(32))).toBeNull();
   });
 });
+
+describe('DiscoveredStore.list memoization', () => {
+  const pk = 'aa'.repeat(32);
+  const pk2 = 'bb'.repeat(32);
+
+  const seeded = (): DiscoveredStore => {
+    const store = new DiscoveredStore();
+    store.upsert(record(), { onRadio: false, nowMs: 1000, heardLive: true });
+    return store;
+  };
+
+  it('returns the same reference until a mutation invalidates it', () => {
+    const store = seeded();
+    const first = store.list();
+    expect(store.list()).toBe(first);
+    store.upsert(record({ publicKeyHex: pk2 }), { onRadio: false, nowMs: 2000, heardLive: true });
+    expect(store.list()).not.toBe(first);
+    expect(store.list()).toHaveLength(2);
+  });
+
+  it.each([
+    ['setOnRadio', (s: DiscoveredStore) => s.setOnRadio(pk, true)],
+    ['setFavourite', (s: DiscoveredStore) => s.setFavourite(pk, true)],
+    ['reconcileOnRadio', (s: DiscoveredStore) => s.reconcileOnRadio([])],
+    ['remove', (s: DiscoveredStore) => s.remove(pk)],
+    ['clearDiscoveredOnly', (s: DiscoveredStore) => s.clearDiscoveredOnly()],
+  ])('%s invalidates the memo', (_name, mutate) => {
+    const store = seeded();
+    const first = store.list();
+    mutate(store);
+    expect(store.list()).not.toBe(first);
+  });
+
+  it('the rebuilt projection reflects the mutation', () => {
+    const store = seeded();
+    expect(store.list()[0].onRadio).toBe(false);
+    store.setOnRadio(pk, true);
+    expect(store.list()[0].onRadio).toBe(true);
+  });
+
+  it('a previously returned array stays a valid pre-mutation snapshot', () => {
+    const store = seeded();
+    const snapshot = store.list();
+    store.remove(pk);
+    expect(snapshot).toHaveLength(1);
+    expect(store.list()).toHaveLength(0);
+  });
+});

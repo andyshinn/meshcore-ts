@@ -67,6 +67,13 @@ function rowToDiscovered(row: DiscoveredRow): DiscoveredContact {
  *  exactly, minus all persistence and block-rule logic. */
 export class DiscoveredStore {
   private rows = new Map<string, DiscoveredRow>();
+  /** Memoized `list()` projection; null when dirty. Every mutator below nulls
+   *  it and `list()` rebuilds a NEW array, so a reference a caller already
+   *  holds stays a valid snapshot.
+   *
+   *  INVARIANT: `get()` hands back the live row. Mutating a row outside the
+   *  mutators below leaves this cache stale — don't. */
+  private listCache: DiscoveredContact[] | null = null;
 
   /** Upsert from a decoded advert/contact frame. Stamps `first_heard_ms` on the
    *  first sighting; preserves it (and the existing favourite flag) on later
@@ -77,6 +84,7 @@ export class DiscoveredStore {
    *  `last_heard_ms` is our-clock and only advances on a live advert — it never
    *  moves on a resync (committing a contact to the radio can't bump it). */
   upsert(record: DiscoveredUpsertRecord, opts: { onRadio: boolean; nowMs: number; heardLive: boolean }): void {
+    this.listCache = null;
     const heardMs = opts.heardLive ? opts.nowMs : 0;
     const incomingFavourite = record.flags & 0x01 ? 1 : 0;
     const existing = this.rows.get(record.publicKeyHex);
@@ -120,9 +128,10 @@ export class DiscoveredStore {
 
   /** Projected list ordered by `last_advert_unix` descending. Each contact's
    *  path hash size is derived from its own out_path_len byte, so no radio-mode
-   *  argument is needed. */
+   *  argument is needed. Memoized — treat the result as immutable. */
   list(): DiscoveredContact[] {
-    return [...this.rows.values()].sort((a, b) => b.last_advert_unix - a.last_advert_unix).map(rowToDiscovered);
+    this.listCache ??= [...this.rows.values()].sort((a, b) => b.last_advert_unix - a.last_advert_unix).map(rowToDiscovered);
+    return this.listCache;
   }
 
   get(pubkey: string): DiscoveredRow | null {
@@ -131,7 +140,9 @@ export class DiscoveredStore {
 
   setOnRadio(pubkey: string, onRadio: boolean): void {
     const row = this.rows.get(pubkey);
-    if (row) row.on_radio = onRadio ? 1 : 0;
+    if (!row) return;
+    row.on_radio = onRadio ? 1 : 0;
+    this.listCache = null;
   }
 
   /** Mark on_radio for exactly the given set (used after a full GET_CONTACTS
@@ -141,6 +152,7 @@ export class DiscoveredStore {
     for (const row of this.rows.values()) {
       row.on_radio = onRadio.has(row.pubkey) ? 1 : 0;
     }
+    this.listCache = null;
   }
 
   setFavourite(pubkey: string, favourite: boolean): void {
@@ -149,16 +161,20 @@ export class DiscoveredStore {
     const bit = favourite ? 1 : 0;
     row.favourite = bit;
     row.flags = (row.flags & ~1) | bit;
+    this.listCache = null;
   }
 
   remove(pubkey: string): void {
-    this.rows.delete(pubkey);
+    if (this.rows.delete(pubkey)) this.listCache = null;
   }
 
   /** Drop discovered-only rows, keeping anything currently on the radio. */
   clearDiscoveredOnly(): void {
     for (const [pubkey, row] of this.rows) {
-      if (row.on_radio === 0) this.rows.delete(pubkey);
+      if (row.on_radio === 0) {
+        this.rows.delete(pubkey);
+        this.listCache = null;
+      }
     }
   }
 }
