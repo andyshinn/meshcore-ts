@@ -266,9 +266,13 @@ allocations instead of ~N²/2, and from 2N full-list events to 2.
 
 No renames, no removals, no signature changes.
 
-**Version: 0.7.0.** Pre-1.0, minor is where breaking change goes. The behavioral
-change is real even though nothing is type-incompatible, so it gets a "Behavior
-change" heading in the changelog rather than a bullet under "Fixed".
+**Version: 0.7.0.** Pre-1.0, minor is where breaking change goes — the
+changelog's own header already states that pre-`1.0` minor bumps may carry
+behaviour changes. The behavioral change is real even though nothing is
+type-incompatible, so it belongs under `### Changed` in the changelog, not as a
+bullet under `### Fixed`. See [Documentation](#documentation) for the release
+mechanics: the version comes from the release tag, not from an edit to
+`package.json`.
 
 **No compat shim and no opt-in flag.** The old cadence is a performance bug, not
 a contract — nothing depends on receiving the identical list N times, and the
@@ -314,15 +318,65 @@ choose.
 
 ## Documentation
 
-- `README.md` — add the three events to the event list.
-- `docs/src/content/docs/guides/events-and-state.md` — add them to the event
-  list, plus a short section on deltas vs. snapshots showing the
-  map-maintaining consumer pattern and the coalescing rule.
-- `docs/src/content/docs/api/**` is typedoc-generated and regenerates from the
-  doc comments; no hand edits.
-- `CHANGELOG.md` — a `0.7.0` entry with a "Behavior change" heading covering the
-  emit cadence, and "Added" for the three events, `ContactsSyncedSummary` and
-  `getContact`.
+Exactly two files enumerate the events by hand; both must be updated or the list
+silently goes stale.
+
+**`README.md:122`** — the flat `## Events` list. Add `contactUpserted`,
+`contactRemoved` and `contactsSynced`. Keep them adjacent to `contacts` /
+`discovered` rather than appended at the end, so the delta/snapshot pairing
+reads off the list.
+
+**`docs/src/content/docs/guides/events-and-state.md:34-40`** — the same list,
+plus the substantive prose change. Add a section after "The events" covering:
+
+- Snapshot vs. delta: `contacts` / `discovered` are full lists; `contactUpserted`
+  / `contactRemoved` are per-contact deltas.
+- The coalescing rule — during a `GET_CONTACTS` sync the snapshots fire **once**,
+  at the end, while deltas keep flowing. This is the behavior change consumers
+  most need to read about, so it is stated here, not only in the changelog.
+- The map-maintaining consumer pattern, as a short snippet:
+
+  ```ts
+  let byKey = new Map<string, Contact>();
+  session.events.on('contacts', (all) => { byKey = new Map(all.map((c) => [c.key, c])); });
+  session.events.on('contactUpserted', (c) => byKey.set(c.key, c));
+  session.events.on('contactRemoved', (key) => byKey.delete(key));
+  session.events.on('contactsSynced', ({ count, mostRecentLastmod }) => { /* re-render once */ });
+  ```
+
+- That `contactObserved` remains the raw-wire-record channel and is unaffected,
+  so the two are not alternatives.
+
+**`docs/src/content/docs/changelog.md`** — the changelog is this Starlight page;
+there is no root `CHANGELOG.md`. Match the existing structure: an `## 0.7.0`
+heading, a one-line italic summary beneath it (`_…_`, as every prior entry has),
+then `### Added` for the three events, `ContactsSyncedSummary` and `getContact`,
+and `### Changed` for the emit cadence. There is no "Behavior change" heading in
+this changelog's vocabulary — `### Changed` is where it goes, and the page
+header already tells readers that pre-`1.0` minor bumps may carry behaviour
+changes.
+
+`package.json` is **not** hand-bumped: the publish job derives the version from
+the GitHub Release tag, and main carries a `-dev.N` version between releases.
+The spec's `0.7.0` is the tag to cut, not a file to edit.
+
+### Generated and no-op surfaces
+
+Recorded so the implementer doesn't go looking for them:
+
+- **`docs/src/content/docs/api/**` is gitignored**, not committed — it is
+  regenerated at build time by `starlight-typedoc` from `../src/index.ts`. There
+  is nothing to hand-edit, which raises the bar on the TSDoc comments: the
+  comments written on the three `MeshCoreEventMap` members, on
+  `ContactsSyncedSummary` and on `getContact` *are* the published API reference.
+- **`llms.txt` is generated** by the `starlight-llms-txt` plugin at build time.
+  No manual file.
+- **`examples/` needs no change.** `waitForEvent` in `examples/lib/helpers.ts` is
+  generic over `keyof Ports.EventMap`, so it types the new events with no edit,
+  and `examples/get-contacts.ts` uses the awaited `session.getContacts()` rather
+  than the event stream — adding a listener there would muddy the example. The
+  delta pattern belongs in the guide snippet above. `pnpm typecheck:examples`
+  still compiles the directory, so any accidental break surfaces.
 
 ## Out of scope
 
