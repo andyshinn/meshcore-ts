@@ -856,7 +856,7 @@ export class MeshCoreSession {
     opts: { manual: boolean; preferDirect?: boolean } = { manual: true },
   ): Promise<void> {
     const state = this.state;
-    const contact = state.getContacts().find((c) => c.key === contactKey);
+    const contact = state.getContact(contactKey);
     if (!contact) throw new Error(`unknown contact ${contactKey}`);
     if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
       throw new Error(`contact ${contactKey} has no full 32B public key`);
@@ -892,7 +892,7 @@ export class MeshCoreSession {
   /** Drop a contact's path back to flood. Mirrors CMD_RESET_PATH. */
   async resetContactPath(contactKey: string): Promise<void> {
     const state = this.state;
-    const contact = state.getContacts().find((c) => c.key === contactKey);
+    const contact = state.getContact(contactKey);
     if (!contact) throw new Error(`unknown contact ${contactKey}`);
     if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
       throw new Error(`contact ${contactKey} has no full 32B public key`);
@@ -995,7 +995,7 @@ export class MeshCoreSession {
     }
     this.state.discovered.setFavourite(publicKeyHex, favourite);
     const state = this.state;
-    const existing = state.getContacts().find((c) => c.key === `c:${publicKeyHex}`);
+    const existing = state.getContact(`c:${publicKeyHex}`);
     if (existing) {
       upsertContact(this.ctx, { ...existing, favourite });
     }
@@ -1006,7 +1006,7 @@ export class MeshCoreSession {
    *  Local-only; no firmware write. */
   setContactPreferDirect(contactKey: string, preferDirect: boolean): void {
     const state = this.state;
-    const contact = state.getContacts().find((c) => c.key === contactKey);
+    const contact = state.getContact(contactKey);
     if (!contact) throw new Error(`unknown contact ${contactKey}`);
     upsertContact(this.ctx, { ...contact, preferDirect });
   }

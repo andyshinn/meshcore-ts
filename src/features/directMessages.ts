@@ -236,7 +236,7 @@ export async function sendDmText(
   messageId: string,
   opts: { attempt?: number } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 12) {
     return { ok: false, error: `contact ${contactKey} has no usable public key` };
@@ -271,7 +271,7 @@ export async function sendDmTextWithRetry(
   text: string,
   messageId: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const initial = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const initial = ctx.state.getContact(contactKey);
   if (!initial) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!initial.publicKeyHex || initial.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
@@ -312,7 +312,7 @@ export async function sendDmTextWithRetry(
     attempt += 1;
     if (!r.ok) continue;
     if ((await awaitDmOutcome(ctx, messageId, PER_ATTEMPT_TIMEOUT_MS)) === 'ack') {
-      const post = ctx.state.getContacts().find((c) => c.key === contactKey);
+      const post = ctx.state.getContact(contactKey);
       const newPath = post?.outPathHex ?? '';
       if (newPath && newPath !== initialPathHex) {
         ctx.events.emit('pathLearned', {

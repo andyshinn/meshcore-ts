@@ -223,7 +223,7 @@ export const pathDiagnosticsFeature: Feature = {
 // ---- Session-facing functions ------------------------------------------
 
 function fullPubKey(ctx: FeatureContext, contactKey: string, label: string): string {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact?.publicKeyHex || contact.publicKeyHex.length < 64) {
     throw new Error(`${label}: contact ${contactKey} has no full 32B public key`);
   }

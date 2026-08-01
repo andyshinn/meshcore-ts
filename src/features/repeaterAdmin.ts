@@ -132,7 +132,7 @@ function lookupRepeaterContact(
   ctx: FeatureContext,
   contactKey: string,
 ): { ok: true; publicKeyHex: string } | { ok: false; error: string } {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
@@ -258,7 +258,7 @@ export async function sendAnonReq(
   anonType: number,
   timeoutMs: number = ADMIN_REPLY_TIMEOUT_MS,
 ): Promise<Buffer> {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact) throw new Error(`unknown contact ${contactKey}`);
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     throw new Error(`contact ${contactKey} has no full 32B public key`);
@@ -309,7 +309,7 @@ export async function sendAnonReq(
  *  transport-level write; the actual `RepeaterStatusSnapshot` arrives later
  *  via PUSH_STATUS_RESPONSE → emit.repeaterStatus(). */
 export async function sendStatusReq(ctx: FeatureContext, contactKey: string): Promise<{ ok: boolean; error?: string }> {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
@@ -332,7 +332,7 @@ export async function sendStatusReq(ctx: FeatureContext, contactKey: string): Pr
  *  PUSH_TELEMETRY_RESPONSE, so we correlate it here and re-emit the SAME
  *  `repeaterTelemetry` snapshot shape consumers already handle. */
 export async function sendTelemetryReq(ctx: FeatureContext, contactKey: string): Promise<{ ok: boolean; error?: string }> {
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   if (!contact) return { ok: false, error: `unknown contact ${contactKey}` };
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
@@ -374,7 +374,7 @@ export async function repeaterLogin(
 ): Promise<LoginSuccess & { mode: AdminMode; effective: RepeaterReachMode }> {
   const lookup = lookupRepeaterContact(ctx, contactKey);
   if (!lookup.ok) throw new Error(lookup.error);
-  const contact = ctx.state.getContacts().find((c) => c.key === contactKey);
+  const contact = ctx.state.getContact(contactKey);
   const preferDirect = contact?.preferDirect === true;
   const mode: AdminMode = preferDirect ? 'local' : 'remote';
   // `contact.hops` is hopsFromOutPathLen(out_path_len): undefined for flood
