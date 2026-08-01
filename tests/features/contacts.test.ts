@@ -407,3 +407,81 @@ describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
     }
   });
 });
+
+describe('contact deltas', () => {
+  it('emits contactUpserted with the merged Contact on a sync record', () => {
+    const { session, transport } = makeSession();
+    try {
+      const seen: Models.Contact[] = [];
+      session.events.on('contactUpserted', (c) => seen.push(c));
+      deliver(transport, contactFrame(pk, 'Alice'));
+      expect(seen).toHaveLength(1);
+      expect(seen[0].key).toBe(`c:${pk}`);
+      expect(seen[0].name).toBe('Alice');
+      expect(seen[0].kind).toBe('chat');
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('emits contactRemoved when the radio evicts a contact', () => {
+    const { session, transport } = makeSession();
+    try {
+      deliver(transport, contactFrame(pk, 'Alice'));
+      const removed: string[] = [];
+      session.events.on('contactRemoved', (key) => removed.push(key));
+      // PUSH_CODE_CONTACT_DELETED [0x8f][32B pubkey]
+      deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
+      expect(removed).toEqual([`c:${pk}`]);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('emits contactRemoved when a placeholder is reconciled to a full key', () => {
+    const { session, transport } = makeSession();
+    try {
+      const prefix = pk.slice(0, 12);
+      session.state.upsertContact({
+        key: `c:${prefix}`,
+        publicKeyHex: prefix,
+        name: `(${prefix})`,
+        kind: 'chat',
+      });
+      const removed: string[] = [];
+      session.events.on('contactRemoved', (key) => removed.push(key));
+      deliver(transport, contactFrame(pk, 'Alice'));
+      expect(removed).toEqual([`c:${prefix}`]);
+      expect(session.state.getContact(`c:${prefix}`)).toBeNull();
+      expect(session.state.getContact(`c:${pk}`)?.name).toBe('Alice');
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('emits contactRemoved when removeContactFromRadio drops a contact', async () => {
+    const { session, transport } = makeSession();
+    try {
+      deliver(transport, contactFrame(pk, 'Alice'));
+      const removed: string[] = [];
+      session.events.on('contactRemoved', (key) => removed.push(key));
+      await session.removeContactFromRadio(pk);
+      expect(removed).toEqual([`c:${pk}`]);
+      expect(session.state.getContact(`c:${pk}`)).toBeNull();
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('does not emit contactRemoved for a key that was never present', () => {
+    const { session, transport } = makeSession();
+    try {
+      const removed: string[] = [];
+      session.events.on('contactRemoved', (key) => removed.push(key));
+      deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
+      expect(removed).toEqual([]);
+    } finally {
+      session.stop();
+    }
+  });
+});

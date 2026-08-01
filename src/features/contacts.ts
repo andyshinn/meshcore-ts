@@ -219,9 +219,34 @@ export function createContactsIterRuntime(): ContactsIterRuntime {
 
 // ---- Ingest / app-logic ------------------------------------------------
 
-/** Push the full discovered pool to the renderer. */
+/** Push the full contact list to consumers. */
+export function emitContacts(ctx: FeatureContext): void {
+  ctx.events.emit('contacts', ctx.state.getContacts());
+}
+
+/** Push the full discovered pool to consumers. */
 export function emitDiscovered(ctx: FeatureContext): void {
   ctx.events.emit('discovered', ctx.state.discovered.list());
+}
+
+/** Commit a contact and broadcast it: the `contactUpserted` delta plus the
+ *  full-list `contacts` snapshot. The single chokepoint for contact writes —
+ *  callers must not reach `ctx.state.upsertContact` directly, or consumers
+ *  maintaining their own map will silently miss the change. */
+export function upsertContact(ctx: FeatureContext, contact: Contact): void {
+  ctx.state.upsertContact(contact);
+  ctx.events.emit('contactUpserted', contact);
+  emitContacts(ctx);
+}
+
+/** Drop a contact and broadcast it. The `contactRemoved` delta fires only when
+ *  the key was actually present, so a delta always names a contact that
+ *  existed; the snapshot fires either way, matching the previous behavior. */
+export function removeContact(ctx: FeatureContext, key: string): void {
+  const existed = ctx.state.getContact(key) !== null;
+  ctx.state.removeContact(key);
+  if (existed) ctx.events.emit('contactRemoved', key);
+  emitContacts(ctx);
 }
 
 /** Whether the firmware would auto-store an advert of this ADV_TYPE, given the
@@ -294,7 +319,7 @@ export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string
 export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord): void {
   const fullKey = `c:${record.publicKeyHex}`;
   const prefix6 = record.publicKeyHex.slice(0, 12);
-  const existing = ctx.state.getContacts().find((c) => c.key === fullKey);
+  const existing = ctx.state.getContact(fullKey);
   // The radio re-pushes the full contact record on every advert; preserve
   // local-only fields the firmware doesn't know about.
   const advertOutPathHex = record.outPathLen === 0xff ? '' : record.outPathHex;
@@ -333,17 +358,16 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
     gpsLat: record.gpsLat !== 0 || record.gpsLon !== 0 ? record.gpsLat : existing?.gpsLat,
     gpsLon: record.gpsLat !== 0 || record.gpsLon !== 0 ? record.gpsLon : existing?.gpsLon,
   };
-  ctx.state.upsertContact(contact);
-
   // Reconcile a synth placeholder we created for a prior incoming DM whose
-  // sender we hadn't seen an advert for yet.
+  // sender we hadn't seen an advert for yet. Done BEFORE the upsert so
+  // consumers never observe the placeholder and the real contact at once.
   const placeholderKey = `c:${prefix6}`;
-  if (placeholderKey !== fullKey && ctx.state.getContacts().some((c) => c.key === placeholderKey)) {
-    ctx.state.removeContact(placeholderKey);
+  if (placeholderKey !== fullKey && ctx.state.getContact(placeholderKey) !== null) {
+    removeContact(ctx, placeholderKey);
     ctx.log.debug(`reconciled placeholder ${placeholderKey} → ${fullKey}`);
   }
 
-  ctx.events.emit('contacts', ctx.state.getContacts());
+  upsertContact(ctx, contact);
 }
 
 /** Upsert a contact heard from RESP_CONTACT (sync, on-radio) or
@@ -351,7 +375,7 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
  *  Always records into the discovered pool with an app-tracked first-heard. */
 export function ingestContact(ctx: FeatureContext, record: ContactRecord, source: ContactSource): void {
   const fullKey = `c:${record.publicKeyHex}`;
-  const alreadyOnRadio = ctx.state.getContacts().some((c) => c.key === fullKey);
+  const alreadyOnRadio = ctx.state.getContact(fullKey) !== null;
   const onRadio = source === 'sync' ? true : alreadyOnRadio;
 
   // First-ever sighting: no row in the discovered pool yet (checked before
@@ -544,10 +568,9 @@ export const contactsFeature: Feature = {
       // for the next full GET_CONTACTS sync.
       const pubkeyHex = decodeAdvert(frame);
       if (pubkeyHex) {
-        const existing = ctx.state.getContacts().find((c) => c.key === `c:${pubkeyHex}`);
+        const existing = ctx.state.getContact(`c:${pubkeyHex}`);
         if (existing) {
-          ctx.state.upsertContact({ ...existing, lastSeenMs: Date.now() });
-          ctx.events.emit('contacts', ctx.state.getContacts());
+          upsertContact(ctx, { ...existing, lastSeenMs: Date.now() });
           ctx.log.trace(`re-advert: touched ${pubkeyHex.slice(0, 12)}`);
           scheduleContactRefresh(ctx, pubkeyHex);
         }
@@ -559,12 +582,9 @@ export const contactsFeature: Feature = {
     if (pubkey) {
       // Resolve a display name before dropping the contact, for the toast.
       const name =
-        ctx.state.getContacts().find((c) => c.key === `c:${pubkey}`)?.name ??
-        ctx.state.discovered.get(pubkey)?.name ??
-        pubkey.slice(0, 12);
+        ctx.state.getContact(`c:${pubkey}`)?.name ?? ctx.state.discovered.get(pubkey)?.name ?? pubkey.slice(0, 12);
       ctx.state.discovered.setOnRadio(pubkey, false);
-      ctx.state.removeContact(`c:${pubkey}`);
-      ctx.events.emit('contacts', ctx.state.getContacts());
+      removeContact(ctx, `c:${pubkey}`);
       emitDiscovered(ctx);
       ctx.events.emit('contactEvicted', name);
       ctx.log.info(`contact evicted by radio: ${name} ${pubkey.slice(0, 12)}`);

@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { ProtocolError } from '../model/errors';
 import { CMD, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
-import { scheduleContactRefresh } from './contacts';
+import { scheduleContactRefresh, upsertContact } from './contacts';
 import type { Feature, FeatureContext } from './feature';
 
 // Path diagnostics (firmware: companion_radio/MyMesh.cpp). Two queries plus a
@@ -197,10 +197,9 @@ export const pathDiagnosticsFeature: Feature = {
       // for the next full GET_CONTACTS sync.
       const pubkeyHex = decodePathUpdated(frame);
       if (pubkeyHex) {
-        const existing = ctx.state.getContacts().find((c) => c.key === `c:${pubkeyHex}`);
+        const existing = ctx.state.getContact(`c:${pubkeyHex}`);
         if (existing) {
-          ctx.state.upsertContact({ ...existing, lastSeenMs: Date.now() });
-          ctx.events.emit('contacts', ctx.state.getContacts());
+          upsertContact(ctx, { ...existing, lastSeenMs: Date.now() });
           ctx.log.trace(`path updated: touched ${pubkeyHex.slice(0, 12)}`);
           scheduleContactRefresh(ctx, pubkeyHex);
         }

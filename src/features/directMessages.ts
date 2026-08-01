@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import type { CliSendPhase, Contact, Message, MessageState } from '../model/types';
 import { CMD, PUSH, RESP, TXT_TYPE } from '../protocol/codes';
-import { encodeResetPath } from './contacts';
+import { encodeResetPath, upsertContact } from './contacts';
 import * as drain from './drain';
 import type { Feature, FeatureContext } from './feature';
 
@@ -297,13 +297,12 @@ export async function sendDmTextWithRetry(
   if (hadPath && floodAttempts > 0) {
     try {
       await ctx.writeFrame(encodeResetPath(initial.publicKeyHex));
-      ctx.state.upsertContact({
+      upsertContact(ctx, {
         ...initial,
         outPathHex: undefined,
         hops: undefined,
         pathManual: false,
       });
-      ctx.events.emit('contacts', ctx.state.getContacts());
     } catch (err) {
       ctx.log.warn(`resetContactPath during retry failed: ${(err as Error).message}`);
     }
@@ -446,8 +445,7 @@ function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): voi
       name: `(${prefix})`,
       kind: 'chat',
     } satisfies Contact;
-    ctx.state.upsertContact(contact);
-    ctx.events.emit('contacts', ctx.state.getContacts());
+    upsertContact(ctx, contact);
     ctx.log.debug(`synth contact for unknown sender prefix=${prefix}`);
   }
 

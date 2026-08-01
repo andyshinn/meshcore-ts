@@ -16,8 +16,10 @@ import {
   encodeResetPath,
   failPendingContactByKey,
   getContactByKey,
+  removeContact,
   resetContactsIter,
   scheduleContactsResync,
+  upsertContact,
   upsertOnRadioContact,
 } from '../features/contacts';
 import { contactsFullFeature } from '../features/contactsFull';
@@ -872,7 +874,7 @@ export class MeshCoreSession {
       name: contact.name,
     });
     await this.writeFrame(frame);
-    state.upsertContact({
+    upsertContact(this.ctx, {
       ...contact,
       outPathHex: outPathHex || undefined,
       outPathHashSize: outPathHex ? hashSize : contact.outPathHashSize,
@@ -881,7 +883,6 @@ export class MeshCoreSession {
       pathLearnedAt: opts.manual ? contact.pathLearnedAt : Date.now(),
       hops: outPathHex ? pathBytes / hashSize : undefined,
     });
-    this.events.emit('contacts', state.getContacts());
   }
 
   /** Drop a contact's path back to flood. Mirrors CMD_RESET_PATH. */
@@ -893,13 +894,12 @@ export class MeshCoreSession {
       throw new Error(`contact ${contactKey} has no full 32B public key`);
     }
     await this.writeFrame(encodeResetPath(contact.publicKeyHex));
-    state.upsertContact({
+    upsertContact(this.ctx, {
       ...contact,
       outPathHex: undefined,
       pathManual: true,
       hops: undefined,
     });
-    this.events.emit('contacts', state.getContacts());
   }
 
   // ---- Contacts ----------------------------------------------------------
@@ -962,9 +962,7 @@ export class MeshCoreSession {
   async removeContactFromRadio(publicKeyHex: string): Promise<void> {
     await this.writeFrame(encodeRemoveContact(publicKeyHex));
     this.state.discovered.setOnRadio(publicKeyHex, false);
-    const state = this.state;
-    state.removeContact(`c:${publicKeyHex}`);
-    this.events.emit('contacts', state.getContacts());
+    removeContact(this.ctx, `c:${publicKeyHex}`);
     emitDiscovered(this.ctx);
   }
 
@@ -995,8 +993,7 @@ export class MeshCoreSession {
     const state = this.state;
     const existing = state.getContacts().find((c) => c.key === `c:${publicKeyHex}`);
     if (existing) {
-      state.upsertContact({ ...existing, favourite });
-      this.events.emit('contacts', state.getContacts());
+      upsertContact(this.ctx, { ...existing, favourite });
     }
     emitDiscovered(this.ctx);
   }
@@ -1007,8 +1004,7 @@ export class MeshCoreSession {
     const state = this.state;
     const contact = state.getContacts().find((c) => c.key === contactKey);
     if (!contact) throw new Error(`unknown contact ${contactKey}`);
-    state.upsertContact({ ...contact, preferDirect });
-    this.events.emit('contacts', state.getContacts());
+    upsertContact(this.ctx, { ...contact, preferDirect });
   }
 
   /** Set the radio's global path-hash mode (bytes per hop). Persists on the
