@@ -647,6 +647,37 @@ describe('contacts bulk sync: the window always closes', () => {
     }
   });
 
+  it('re-arms the watchdog on every RESP_CONTACT, not just at START', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    try {
+      let contacts = 0;
+      session.events.on('contacts', () => {
+        contacts += 1;
+      });
+
+      const start = Buffer.alloc(5);
+      start[0] = 0x02;
+      start.writeUInt32LE(3, 1);
+      deliver(transport, start);
+
+      // Two contacts, ~8s apart — each below the 10s idle timeout on its
+      // own, but 16s have elapsed since RESP_CONTACTS_START by the end. If
+      // the window only watched the clock from START (no per-contact
+      // re-arm), the 10s watchdog would have force-closed it partway
+      // through. Since every RESP_CONTACT re-arms the timer, the window
+      // must still be open.
+      deliver(transport, contactFrame('aa'.repeat(32), 'Alice'));
+      await vi.advanceTimersByTimeAsync(8_000);
+      deliver(transport, contactFrame('bb'.repeat(32), 'Bob'));
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      expect(contacts).toBe(0); // still coalesced — the window never closed
+    } finally {
+      session.stop();
+    }
+  });
+
   it('flushes without contactsSynced when the transport drops mid-sync', () => {
     const { session, transport } = makeSession();
     try {
@@ -675,13 +706,24 @@ describe('contacts bulk sync: the window always closes', () => {
   it('does not latch the gate into the next sync', () => {
     const { session, transport } = makeSession();
     try {
-      openPartialSync(transport); // window left open
       let contacts = 0;
       session.events.on('contacts', () => {
         contacts += 1;
       });
+
+      openPartialSync(transport); // window left open
+      expect(contacts).toBe(0); // coalesced, not yet flushed
+
       driveSync(transport, 2); // a fresh START..END pair must still flush
-      expect(contacts).toBeGreaterThanOrEqual(1);
+      // Two distinct flushes are expected here, not just "at least one":
+      // the fresh RESP_CONTACTS_START re-opens on top of an already-open
+      // window, so openContactsBulk's re-entrancy close flushes window 1's
+      // suppressed snapshot first (flush #1); RESP_END_OF_CONTACTS then
+      // flushes window 2's snapshot once more (flush #2). A `>=1` assertion
+      // can't tell a genuine re-entrancy close from a broken one — deleting
+      // either close path still leaves a single flush from the other, so
+      // this must pin the exact count.
+      expect(contacts).toBe(2);
       expect(session.state.getContacts()).toHaveLength(2);
     } finally {
       session.stop();
