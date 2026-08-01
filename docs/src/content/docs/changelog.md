@@ -7,6 +7,37 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.7.0
+
+_Syncing contacts stops being quadratic, and consumers get per-contact deltas._
+
+### Added
+
+- **`contactUpserted` and `contactRemoved`** — per-contact delta events, so a
+  consumer can maintain its own map instead of re-rendering the whole list on
+  every change. `contactUpserted` carries the merged `Contact`, not the raw wire
+  record, so the library's path/GPS/favourite merge rules aren't something you
+  have to reimplement.
+- **`contactsSynced`** — fires when a `GET_CONTACTS` iteration completes,
+  carrying `ContactsSyncedSummary { count, mostRecentLastmod }`.
+  `mostRecentLastmod` was previously decoded and discarded, leaving no way to
+  obtain the value an incremental re-sync needs.
+- **`SessionState.getContact(key)`** — O(1) lookup by contact key.
+
+### Changed
+
+- **`contacts` and `discovered` are coalesced during a contact sync.** They
+  previously fired once per `RESP_CONTACT`; they now fire once, at the end of
+  the iteration, immediately before `contactsSynced`. Syncing N contacts emits
+  2 full-list events instead of 2N. If you were relying on the list growing
+  incrementally mid-sync, subscribe to `contactUpserted` instead — and
+  `syncProgress` still reports done/total throughout.
+- Contact ingest is O(1) per record rather than O(N): `SessionState` is backed
+  by a `Map` and `DiscoveredStore.list()` is memoized behind a dirty flag. A
+  full sync drops from O(N² log N) to O(N log N). `getContacts()` and
+  `DiscoveredStore.list()` now return memoized arrays — treat them as
+  immutable, as `getContacts()` already required.
+
 ## 0.6.0
 
 _Heard repeater relays are attributed to the send they actually belong to._

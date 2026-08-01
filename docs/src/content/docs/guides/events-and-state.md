@@ -32,7 +32,8 @@ transport.setState('connected');
 ## The events
 
 `transportState`, `rawPacket`, `channels`, `channelPresence`, `syncProgress`,
-`contacts`, `discovered`, `contactEvicted`, `contactDiscovered`, `contactsFull`,
+`contacts`, `discovered`, `contactUpserted`, `contactRemoved`, `contactsSynced`,
+`contactEvicted`, `contactDiscovered`, `contactsFull`,
 `contactObserved`, `messages`, `messageUpserted`, `messageState`,
 `messagePathHeard`, `cliSendState`, `cliUnmatched`, `owner`, `radioSettings`,
 `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`,
@@ -41,6 +42,44 @@ transport.setState('connected');
 
 All payloads are exported types — see `Ports.EventMap` in the
 [API reference](../../api/readme/).
+
+## Snapshots and deltas
+
+`contacts` and `discovered` are **snapshots** — the whole list, every time.
+`contactUpserted` and `contactRemoved` are **deltas** — one contact each.
+
+During a bulk contact sync the snapshots are **coalesced**: they fire once, at
+the end, rather than once per contact. The deltas keep flowing throughout, and
+`contactsSynced` closes the sequence after both snapshots have been emitted. So
+a sync of 400 contacts costs you two full-list renders, not eight hundred.
+
+Maintain your own map from the deltas and re-render once at the end:
+
+```ts
+let byKey = new Map<string, Contact>();
+
+session.events.on('contacts', (all) => {
+  byKey = new Map(all.map((c) => [c.key, c]));
+});
+session.events.on('contactUpserted', (c) => byKey.set(c.key, c));
+session.events.on('contactRemoved', (key) => byKey.delete(key));
+session.events.on('contactsSynced', ({ count, mostRecentLastmod }) => {
+  console.log(`${count} contacts synced`);
+  render(byKey);
+});
+```
+
+`contactsSynced` fires only when the radio actually finished the iteration. A
+sync abandoned by a disconnect or a stalled radio still flushes its snapshots,
+so your list is never left stale — you just don't get a summary for it.
+
+`mostRecentLastmod` is the radio's newest contact modification time. Keep it and
+you can ask for an incremental sync next time instead of a full enumeration.
+
+`contactObserved` is unaffected by any of this. It carries the raw decoded
+`ContactRecord` off the wire, for consumers that persist the protocol record
+rather than the merged `Contact` — it is a companion to these events, not an
+alternative.
 
 There is intentionally no generic `error` event. Specific recoverable
 conditions get their own dedicated event instead — for example `contactsFull`
