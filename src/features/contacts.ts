@@ -184,6 +184,10 @@ export function decodeAdvert(frame: Buffer): string | null {
 
 const GET_CONTACT_BY_KEY_TIMEOUT_MS = 5_000;
 
+/** Idle timeout for an open bulk-sync window. Mirrors the session's private
+ *  CONTACTS_DONE_WAIT_MS so the watchdog never pre-empts a healthy sync. */
+const CONTACTS_BULK_IDLE_MS = 10_000;
+
 export interface PendingContactByKey {
   publicKeyHex: string;
   resolve: (record: ContactRecord | null) => void;
@@ -204,6 +208,14 @@ export interface ContactsIterRuntime {
    *  by publicKeyHex. Prevents a burst of PUSH_ADVERT / PUSH_PATH_UPDATED for
    *  the same contact from spamming CMD_GET_CONTACT_BY_KEY. */
   refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+  /** True between RESP_CONTACTS_START and RESP_END_OF_CONTACTS. While set,
+   *  full-list snapshot emits are recorded as pending instead of fired. */
+  bulk: boolean;
+  /** Snapshot emits requested while `bulk` was set, flushed on close. */
+  pendingContacts: boolean;
+  pendingDiscovered: boolean;
+  /** Idle watchdog that force-closes a window the radio never terminated. */
+  bulkWatchdog: ReturnType<typeof setTimeout> | null;
 }
 
 export function createContactsIterRuntime(): ContactsIterRuntime {
@@ -214,19 +226,72 @@ export function createContactsIterRuntime(): ContactsIterRuntime {
     resyncTimer: null,
     pendingContactByKey: [],
     refreshTimers: new Map(),
+    bulk: false,
+    pendingContacts: false,
+    pendingDiscovered: false,
+    bulkWatchdog: null,
   };
 }
 
 // ---- Ingest / app-logic ------------------------------------------------
 
-/** Push the full contact list to consumers. */
+/** Push the full contact list to consumers. Coalesced during a bulk sync —
+ *  see {@link closeContactsBulk}. */
 export function emitContacts(ctx: FeatureContext): void {
+  if (ctx.rt.contactsIter.bulk) {
+    ctx.rt.contactsIter.pendingContacts = true;
+    return;
+  }
   ctx.events.emit('contacts', ctx.state.getContacts());
 }
 
-/** Push the full discovered pool to consumers. */
+/** Push the full discovered pool to consumers. Coalesced during a bulk sync. */
 export function emitDiscovered(ctx: FeatureContext): void {
+  if (ctx.rt.contactsIter.bulk) {
+    ctx.rt.contactsIter.pendingDiscovered = true;
+    return;
+  }
   ctx.events.emit('discovered', ctx.state.discovered.list());
+}
+
+/** (Re)arm the idle watchdog so a radio that stops mid-iteration can't strand
+ *  consumers on a stale list. */
+function armBulkWatchdog(ctx: FeatureContext): void {
+  const rt = ctx.rt.contactsIter;
+  if (rt.bulkWatchdog) clearTimeout(rt.bulkWatchdog);
+  rt.bulkWatchdog = setTimeout(() => {
+    rt.bulkWatchdog = null;
+    ctx.log.warn('contacts bulk window timed out — flushing coalesced snapshots');
+    closeContactsBulk(ctx);
+  }, CONTACTS_BULK_IDLE_MS);
+}
+
+/** Open the snapshot-coalescing window and arm the watchdog. A second
+ *  RESP_CONTACTS_START while one is already open closes the old window first,
+ *  so an abandoned iteration's suppressed snapshot is published rather than
+ *  silently absorbed into the new sync. */
+function openContactsBulk(ctx: FeatureContext): void {
+  if (ctx.rt.contactsIter.bulk) closeContactsBulk(ctx);
+  ctx.rt.contactsIter.bulk = true;
+  armBulkWatchdog(ctx);
+}
+
+/** Close the coalescing window and flush whatever it suppressed. Safe to call
+ *  when no window is open. Never emits `contactsSynced` — only a real
+ *  RESP_END_OF_CONTACTS reports a completed iteration. */
+export function closeContactsBulk(ctx: FeatureContext): void {
+  const rt = ctx.rt.contactsIter;
+  if (rt.bulkWatchdog) {
+    clearTimeout(rt.bulkWatchdog);
+    rt.bulkWatchdog = null;
+  }
+  // Clear the gate BEFORE flushing, or the emitters just re-pend.
+  rt.bulk = false;
+  const { pendingContacts, pendingDiscovered } = rt;
+  rt.pendingContacts = false;
+  rt.pendingDiscovered = false;
+  if (pendingContacts) emitContacts(ctx);
+  if (pendingDiscovered) emitDiscovered(ctx);
 }
 
 /** Commit a contact and broadcast it: the `contactUpserted` delta plus the
@@ -415,6 +480,7 @@ export function ingestContact(ctx: FeatureContext, record: ContactRecord, source
 
 /** Clear the iterator counters + any pending resync (called on disconnect). */
 export function resetContactsIter(ctx: FeatureContext): void {
+  closeContactsBulk(ctx);
   ctx.rt.contactsIter.iterTotal = 0;
   ctx.rt.contactsIter.iterCount = 0;
   ctx.rt.contactsIter.syncSeen = [];
@@ -501,6 +567,7 @@ export const contactsFeature: Feature = {
         ctx.rt.contactsIter.syncSeen = [];
         ctx.log.debug(`contacts iterator starting: total=${total}`);
       }
+      openContactsBulk(ctx);
       ctx.contactsSync({ phase: 'start', total });
       return;
     }
@@ -513,6 +580,7 @@ export const contactsFeature: Feature = {
         ctx.rt.contactsIter.syncSeen.push(record.publicKeyHex);
         ingestContact(ctx, record, 'sync');
         ctx.rt.contactsIter.iterCount += 1;
+        if (ctx.rt.contactsIter.bulk) armBulkWatchdog(ctx);
         // Self-heal if the radio's CONTACTS_START total was optimistic (or
         // never arrived): never let `done` exceed `total`, which would render
         // as e.g. "41/40" in the footer.
@@ -537,18 +605,23 @@ export const contactsFeature: Feature = {
       const seenSet = new Set(seen.map((pk) => `c:${pk}`));
       for (const c of ctx.state.getContacts()) {
         if (!seenSet.has(c.key) && c.publicKeyHex.length >= 64) {
-          ctx.state.removeContact(c.key);
+          removeContact(ctx, c.key);
         }
       }
       ctx.rt.contactsIter.syncSeen = [];
-      ctx.events.emit('contacts', ctx.state.getContacts());
-      emitDiscovered(ctx);
+      // Flush unconditionally: reconcileOnRadio rewrote on_radio across the
+      // pool without going through an emit helper, so an iteration that
+      // delivered nothing still has state consumers must see.
+      ctx.rt.contactsIter.pendingContacts = true;
+      ctx.rt.contactsIter.pendingDiscovered = true;
+      closeContactsBulk(ctx);
       // Snap contact total to the actual delivered count so the bar reads N/N
       // even if the radio's CONTACTS_START total was optimistic.
       const done = ctx.rt.contactsIter.iterCount;
       ctx.rt.contactsIter.iterTotal = 0;
       ctx.rt.contactsIter.iterCount = 0;
       ctx.contactsSync({ phase: 'done', done });
+      ctx.events.emit('contactsSynced', { count: done, mostRecentLastmod: mostRecent });
       return;
     }
     if (code === PUSH.NEW_ADVERT) {

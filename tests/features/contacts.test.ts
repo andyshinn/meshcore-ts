@@ -12,7 +12,7 @@ import {
   encodeRemoveContact,
   encodeResetPath,
 } from '../../src/features/contacts';
-import type { Models } from '../../src/index';
+import type { Models, Transports } from '../../src/index';
 import { hashSizeFromOutPathLen, hopsFromOutPathLen } from '../../src/model/contacts';
 import { deliver, makeSession } from '../support/harness';
 
@@ -480,6 +480,209 @@ describe('contact deltas', () => {
       session.events.on('contactRemoved', (key) => removed.push(key));
       deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
       expect(removed).toEqual([]);
+    } finally {
+      session.stop();
+    }
+  });
+});
+
+/** Drive a complete GET_CONTACTS iteration of `n` contacts through the session. */
+function driveSync(transport: Transports.Loopback, n: number, lastmod = 0): void {
+  const start = Buffer.alloc(5);
+  start[0] = 0x02; // RESP_CONTACTS_START
+  start.writeUInt32LE(n, 1);
+  deliver(transport, start);
+  for (let i = 0; i < n; i += 1) {
+    const pubkey = i.toString(16).padStart(2, '0').repeat(32);
+    deliver(transport, contactFrame(pubkey, `Contact${i}`));
+  }
+  const eoc = Buffer.alloc(5);
+  eoc[0] = 0x04; // RESP_END_OF_CONTACTS
+  eoc.writeUInt32LE(lastmod, 1);
+  deliver(transport, eoc);
+}
+
+describe('contacts bulk sync: full-list emits are O(1), not O(N)', () => {
+  function countsFor(n: number) {
+    const { session, transport } = makeSession();
+    try {
+      const counts = { contacts: 0, discovered: 0, contactUpserted: 0, contactsSynced: 0 };
+      session.events.on('contacts', () => {
+        counts.contacts += 1;
+      });
+      session.events.on('discovered', () => {
+        counts.discovered += 1;
+      });
+      session.events.on('contactUpserted', () => {
+        counts.contactUpserted += 1;
+      });
+      session.events.on('contactsSynced', () => {
+        counts.contactsSynced += 1;
+      });
+      driveSync(transport, n);
+      return { ...counts };
+    } finally {
+      session.stop();
+    }
+  }
+
+  it('emits exactly one contacts + one discovered regardless of N', () => {
+    const small = countsFor(5);
+    const large = countsFor(50);
+    expect(small.contacts).toBe(1);
+    expect(small.discovered).toBe(1);
+    expect(large.contacts).toBe(small.contacts);
+    expect(large.discovered).toBe(small.discovered);
+    expect(large.contactsSynced).toBe(1);
+  });
+
+  it('still emits one contactUpserted delta per contact', () => {
+    expect(countsFor(5).contactUpserted).toBe(5);
+    expect(countsFor(50).contactUpserted).toBe(50);
+  });
+
+  it('flushes contacts, then discovered, then contactsSynced', () => {
+    const { session, transport } = makeSession();
+    try {
+      const order: string[] = [];
+      let flushedLength = 0;
+      session.events.on('contacts', (all) => {
+        order.push('contacts');
+        flushedLength = all.length;
+      });
+      session.events.on('discovered', () => order.push('discovered'));
+      session.events.on('contactsSynced', () => order.push('contactsSynced'));
+      driveSync(transport, 3);
+      expect(order).toEqual(['contacts', 'discovered', 'contactsSynced']);
+      expect(flushedLength).toBe(3);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('reports the delivered count and most_recent_lastmod', () => {
+    const { session, transport } = makeSession();
+    try {
+      const seen: Models.ContactsSyncedSummary[] = [];
+      session.events.on('contactsSynced', (s) => seen.push(s));
+      driveSync(transport, 3, 4242);
+      expect(seen).toEqual([{ count: 3, mostRecentLastmod: 4242 }]);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('an empty iteration still flushes both snapshots', () => {
+    // reconcileOnRadio rewrites on_radio without going through an emit helper,
+    // so the flush must not be conditional on a delta having fired.
+    const { session, transport } = makeSession();
+    try {
+      const counts = { contacts: 0, discovered: 0 };
+      session.events.on('contacts', () => {
+        counts.contacts += 1;
+      });
+      session.events.on('discovered', () => {
+        counts.discovered += 1;
+      });
+      driveSync(transport, 0);
+      expect(counts).toEqual({ contacts: 1, discovered: 1 });
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('emits contactRemoved for a contact the radio no longer lists', () => {
+    const { session, transport } = makeSession();
+    try {
+      const stale = 'cc'.repeat(32);
+      session.state.upsertContact({
+        key: `c:${stale}`,
+        publicKeyHex: stale,
+        name: 'Stale',
+        kind: 'chat',
+      });
+      const removed: string[] = [];
+      session.events.on('contactRemoved', (key) => removed.push(key));
+      driveSync(transport, 1);
+      expect(removed).toEqual([`c:${stale}`]);
+    } finally {
+      session.stop();
+    }
+  });
+});
+
+describe('contacts bulk sync: the window always closes', () => {
+  afterEach(() => vi.useRealTimers());
+
+  function openPartialSync(transport: Transports.Loopback): void {
+    const start = Buffer.alloc(5);
+    start[0] = 0x02;
+    start.writeUInt32LE(2, 1);
+    deliver(transport, start);
+    deliver(transport, contactFrame('aa'.repeat(32), 'Alice'));
+  }
+
+  it('flushes without contactsSynced when the radio abandons the iteration', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    try {
+      let contacts = 0;
+      let synced = 0;
+      session.events.on('contacts', () => {
+        contacts += 1;
+      });
+      session.events.on('contactsSynced', () => {
+        synced += 1;
+      });
+
+      openPartialSync(transport);
+      expect(contacts).toBe(0); // coalesced, not yet flushed
+
+      await vi.advanceTimersByTimeAsync(11_000);
+
+      expect(contacts).toBe(1); // watchdog forced the flush
+      expect(synced).toBe(0); // no iteration completed
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('flushes without contactsSynced when the transport drops mid-sync', () => {
+    const { session, transport } = makeSession();
+    try {
+      let contacts = 0;
+      let synced = 0;
+      session.events.on('contacts', () => {
+        contacts += 1;
+      });
+      session.events.on('contactsSynced', () => {
+        synced += 1;
+      });
+
+      transport.setState('connected'); // arms the handshake
+      openPartialSync(transport);
+      const beforeDrop = contacts;
+
+      transport.setState('error'); // wasConnected → disconnect branch
+
+      expect(contacts).toBe(beforeDrop + 1);
+      expect(synced).toBe(0);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it('does not latch the gate into the next sync', () => {
+    const { session, transport } = makeSession();
+    try {
+      openPartialSync(transport); // window left open
+      let contacts = 0;
+      session.events.on('contacts', () => {
+        contacts += 1;
+      });
+      driveSync(transport, 2); // a fresh START..END pair must still flush
+      expect(contacts).toBeGreaterThanOrEqual(1);
+      expect(session.state.getContacts()).toHaveLength(2);
     } finally {
       session.stop();
     }

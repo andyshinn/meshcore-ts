@@ -8,6 +8,7 @@ import * as channelMessages from '../features/channelMessages';
 import * as channels from '../features/channels';
 import * as contactInterop from '../features/contactInterop';
 import {
+  closeContactsBulk,
   contactsFeature,
   emitDiscovered,
   encodeAddUpdateContact,
@@ -569,6 +570,9 @@ export class MeshCoreSession {
       // they return promptly on disconnect instead of riding out the watchdog.
       this.resolveWaiter('contactsStartWaiter');
       this.resolveWaiter('contactsDoneWaiter');
+      // A sync abandoned mid-iteration must not leave snapshot emits latched:
+      // flush the partial list, which is what the session actually holds.
+      closeContactsBulk(this.ctx);
     }
   };
 
