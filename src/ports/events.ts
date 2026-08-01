@@ -8,6 +8,7 @@ import type {
   CliUnmatchedEvent,
   Contact,
   ContactKind,
+  ContactsSyncedSummary,
   DeviceCapabilities,
   DeviceIdentity,
   DeviceInfo,
@@ -43,6 +44,18 @@ export interface MeshCoreEventMap {
   channelPresence: (keys: string[]) => void;
   syncProgress: (progress: SyncProgress) => void;
   contacts: (contacts: Contact[]) => void;
+  /** A single inserted/updated contact — a delta companion to `contacts`.
+   *  Always fires immediately, including during a bulk GET_CONTACTS sync where
+   *  the `contacts` snapshot is coalesced to one end-of-sync emit. */
+  contactUpserted: (contact: Contact) => void;
+  /** A contact dropped from the local store, by key (`c:<pubkey>`) — the delta
+   *  companion to a removal reflected in `contacts`. Always fires immediately. */
+  contactRemoved: (key: string) => void;
+  /** A CMD_GET_CONTACTS iteration finished. Fires after the flushed `contacts`
+   *  and `discovered` snapshots, so both are current when it lands. Only
+   *  RESP_END_OF_CONTACTS emits this — an iteration abandoned by a disconnect
+   *  or a stalled radio flushes its snapshots but reports no summary. */
+  contactsSynced: (summary: ContactsSyncedSummary) => void;
   discovered: (rows: DiscoveredContact[]) => void;
   contactEvicted: (name: string) => void;
   /** The radio's contact store is full — a new advert could not be auto-added
@@ -95,6 +108,9 @@ export const EventName = {
   CHANNEL_PRESENCE: 'channelPresence',
   SYNC_PROGRESS: 'syncProgress',
   CONTACTS: 'contacts',
+  CONTACT_UPSERTED: 'contactUpserted',
+  CONTACT_REMOVED: 'contactRemoved',
+  CONTACTS_SYNCED: 'contactsSynced',
   DISCOVERED: 'discovered',
   CONTACT_EVICTED: 'contactEvicted',
   CONTACTS_FULL: 'contactsFull',

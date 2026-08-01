@@ -48,6 +48,20 @@ describe('public surface — top-level', () => {
     expect(pkg.Ports.EventName.CLI_UNMATCHED).toBe('cliUnmatched');
   });
 
+  it('registers the contact delta + sync event names', () => {
+    expect(pkg.Ports.EventName.CONTACT_UPSERTED).toBe('contactUpserted');
+    expect(pkg.Ports.EventName.CONTACT_REMOVED).toBe('contactRemoved');
+    expect(pkg.Ports.EventName.CONTACTS_SYNCED).toBe('contactsSynced');
+  });
+
+  it('exposes ContactsSyncedSummary on Models', () => {
+    const summary: import('../src/index').Models.ContactsSyncedSummary = {
+      count: 3,
+      mostRecentLastmod: null,
+    };
+    expect(summary.count).toBe(3);
+  });
+
   it('Features is a type-only namespace (compile-time reachable)', () => {
     const _check: import('../src/index').Features.SelfInfo | undefined = undefined;
     expect(_check).toBeUndefined();

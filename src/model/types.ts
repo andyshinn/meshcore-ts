@@ -359,6 +359,17 @@ export interface RepeaterTelemetrySnapshot {
   }>;
 }
 
+/** Summary of a completed CMD_GET_CONTACTS iteration, carried by the
+ *  `contactsSynced` event. */
+export interface ContactsSyncedSummary {
+  /** RESP_CONTACT records delivered in this iteration. */
+  count: number;
+  /** `most_recent_lastmod` from RESP_END_OF_CONTACTS. Feed it back as the
+   *  `since` argument of a later GET_CONTACTS for an incremental re-sync.
+   *  Null when the frame was too short to decode. */
+  mostRecentLastmod: number | null;
+}
+
 export interface PathLearnedEvent {
   contactKey: string;
   /** New out-path bytes the radio observed when the send succeeded. May be

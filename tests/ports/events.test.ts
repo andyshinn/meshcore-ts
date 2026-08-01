@@ -82,3 +82,31 @@ describe('MeshCoreEvents', () => {
     expect(events.removeAllListeners()).toBe(events);
   });
 });
+
+describe('MeshCoreEvents: contact delta + sync events', () => {
+  it('delivers typed args for contactUpserted, contactRemoved and contactsSynced', () => {
+    const events = new MeshCoreEvents();
+    const upserted: Models.Contact[] = [];
+    const removed: string[] = [];
+    const synced: Models.ContactsSyncedSummary[] = [];
+    events.on('contactUpserted', (c) => upserted.push(c));
+    events.on('contactRemoved', (key) => removed.push(key));
+    events.on('contactsSynced', (s) => synced.push(s));
+
+    events.emit('contactUpserted', contact('c:aa'));
+    events.emit('contactRemoved', 'c:aa');
+    events.emit('contactsSynced', { count: 1, mostRecentLastmod: 4242 });
+
+    expect(upserted.map((c) => c.key)).toEqual(['c:aa']);
+    expect(removed).toEqual(['c:aa']);
+    expect(synced).toEqual([{ count: 1, mostRecentLastmod: 4242 }]);
+  });
+
+  it('accepts a null mostRecentLastmod', () => {
+    const events = new MeshCoreEvents();
+    const synced: Models.ContactsSyncedSummary[] = [];
+    events.on('contactsSynced', (s) => synced.push(s));
+    events.emit('contactsSynced', { count: 0, mostRecentLastmod: null });
+    expect(synced).toEqual([{ count: 0, mostRecentLastmod: null }]);
+  });
+});
