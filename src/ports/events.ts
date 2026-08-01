@@ -50,8 +50,10 @@ export interface MeshCoreEventMap {
    *  sync's own records. Those writes' deltas ({@link MeshCoreEventMap.contactUpserted}
    *  / {@link MeshCoreEventMap.contactRemoved}) still fire immediately; only
    *  this snapshot waits for the flush, which lands at the end of the sync
-   *  or, failing that, an idle watchdog (≤10s). Memoized: treat as
-   *  immutable. */
+   *  or, failing that, once the radio goes 10s without sending another
+   *  record (idle timeout, re-armed on every record — not a cap on total
+   *  wait; a healthy sync holds the window open for its whole duration).
+   *  Memoized: treat as immutable. */
   contacts: (contacts: Contact[]) => void;
   /** A single inserted/updated contact — a delta companion to `contacts`.
    *  Always fires immediately, including during a bulk GET_CONTACTS sync where
