@@ -37,6 +37,16 @@ _Syncing contacts stops being quadratic, and consumers get per-contact deltas._
   full sync drops from O(N² log N) to O(N log N). `getContacts()` and
   `DiscoveredStore.list()` now return memoized arrays — treat them as
   immutable, as `getContacts()` already required.
+- Placeholder-to-full-key reconciliation now removes the placeholder before
+  upserting the real contact, not after. The placeholder is the synthesised
+  stand-in a DM from an unknown sender creates until an advert supplies the
+  full public key; reconciling it outside a coalesced sync window — for
+  example, `addContactToRadio` committing a discovered contact that already
+  has an outstanding placeholder — now fires one `contacts` snapshot where
+  the contact is absent entirely, immediately followed by a second snapshot
+  with the real contact. Both emits land in the same synchronous call, so
+  batching frameworks (React 18+) never render the gap, but code that reacts
+  to `contacts` directly will see the transient.
 
 ## 0.6.0
 

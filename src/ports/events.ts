@@ -43,6 +43,15 @@ export interface MeshCoreEventMap {
   channels: (channels: Channel[]) => void;
   channelPresence: (keys: string[]) => void;
   syncProgress: (progress: SyncProgress) => void;
+  /** The full contact list. Coalesced during a bulk `GET_CONTACTS` sync: fires
+   *  once at the end rather than once per contact. While that window is open,
+   *  ALL snapshot emits are suppressed — including ones caused by your own
+   *  writes (`setContactFavourite`, `addContactToRadio`, …), not just the
+   *  sync's own records. Those writes' deltas ({@link MeshCoreEventMap.contactUpserted}
+   *  / {@link MeshCoreEventMap.contactRemoved}) still fire immediately; only
+   *  this snapshot waits for the flush, which lands at the end of the sync
+   *  or, failing that, an idle watchdog (≤10s). Memoized: treat as
+   *  immutable. */
   contacts: (contacts: Contact[]) => void;
   /** A single inserted/updated contact — a delta companion to `contacts`.
    *  Always fires immediately, including during a bulk GET_CONTACTS sync where
@@ -56,6 +65,14 @@ export interface MeshCoreEventMap {
    *  RESP_END_OF_CONTACTS emits this — an iteration abandoned by a disconnect
    *  or a stalled radio flushes its snapshots but reports no summary. */
   contactsSynced: (summary: ContactsSyncedSummary) => void;
+  /** The full discovered pool — every contact the app has heard of, on-radio
+   *  or not. Coalesced during a bulk `GET_CONTACTS` sync exactly like
+   *  {@link MeshCoreEventMap.contacts}, and for the same reason: ALL snapshot
+   *  emits, including ones from your own writes, are suppressed while the
+   *  window is open. Unlike `contacts`, `discovered` has no delta companion —
+   *  a write that touches only the discovered pool (e.g. `setContactFavourite`
+   *  on a discovered-only/off-radio contact) produces no event at all until
+   *  the window flushes. Memoized: treat as immutable. */
   discovered: (rows: DiscoveredContact[]) => void;
   contactEvicted: (name: string) => void;
   /** The radio's contact store is full — a new advert could not be auto-added

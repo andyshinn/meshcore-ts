@@ -53,6 +53,11 @@ the end, rather than once per contact. The deltas keep flowing throughout, and
 `contactsSynced` closes the sequence after both snapshots have been emitted. So
 a sync of 400 contacts costs you two full-list renders, not eight hundred.
 
+The coalescing window suppresses *every* snapshot emit while it's open, not
+just the sync's own records — a `setContactFavourite` or `addContactToRadio`
+call you make mid-sync also has its `contacts`/`discovered` snapshot deferred
+to the same flush, even though its delta (where one exists) fires immediately.
+
 Maintain your own map from the deltas and re-render once at the end:
 
 ```ts
