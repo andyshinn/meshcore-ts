@@ -32,6 +32,22 @@ describe('channelMessages: decodeChannelMsgV3', () => {
     expect(msg?.cleanBody).toBe('hello');
   });
 
+  it('reads the rssi byte that sits between snr and the reserved byte', () => {
+    const body = Buffer.from('Alice: hello', 'utf8');
+    const frame = Buffer.alloc(11 + body.length);
+    frame[0] = 0x11;
+    frame.writeInt8(50, 1); // snr*4
+    frame.writeInt8(-95, 2); // rssi dBm — signed, always negative in practice
+    frame[4] = 3;
+    frame[5] = 0xff;
+    frame[6] = 0;
+    frame.writeUInt32LE(1_700_000_000, 7);
+    body.copy(frame, 11);
+    const msg = decodeChannelMsgV3(frame);
+    expect(msg?.rssi).toBe(-95);
+    expect(msg?.snrDb).toBe(12.5); // rssi doesn't disturb the snr read
+  });
+
   it('returns null below 11 bytes', () => {
     expect(decodeChannelMsgV3(Buffer.alloc(10))).toBeNull();
   });

@@ -34,7 +34,8 @@ export function encodeSendChannelText(opts: {
 // onChannelMessageRecv):
 //   [0]: 0x11
 //   [1]: snr*4 (signed int8) — divide by 4 for dB
-//   [2..3]: 2B reserved
+//   [2]: rssi (signed int8) — dBm as measured on the LoRa frame
+//   [3]: 1B reserved
 //   [4]: channel index (slot on the radio)
 //   [5]: path_len (hop count for flood; 0xFF for direct)
 //   [6]: txt_type
@@ -42,6 +43,8 @@ export function encodeSendChannelText(opts: {
 //   [11..]: text body (often prefixed "name: ")
 export interface ChannelMsgV3 {
   snrDb: number;
+  /** Absent on V1 frames, which carry no signal header at all. */
+  rssi?: number;
   channelIdx: number;
   pathLen: number;
   txtType: number;
@@ -55,6 +58,7 @@ export interface ChannelMsgV3 {
 export function decodeChannelMsgV3(frame: Buffer): ChannelMsgV3 | null {
   if (frame.length < 11) return null;
   const snrRaw = frame.readInt8(1);
+  const rssi = frame.readInt8(2);
   const channelIdx = frame[4];
   const pathLen = frame[5];
   const txtType = frame[6];
@@ -63,6 +67,7 @@ export function decodeChannelMsgV3(frame: Buffer): ChannelMsgV3 | null {
   const { senderName, cleanBody } = splitSenderPrefix(body);
   return {
     snrDb: snrRaw / 4,
+    rssi,
     channelIdx,
     pathLen,
     txtType,
@@ -204,6 +209,9 @@ export const channelMessagesFeature: Feature = {
       state: 'received',
       meta: {
         snr: finalSnr,
+        // Absent on V1 frames — keep the key off the object rather than
+        // publishing an `rssi: undefined`.
+        ...(parsed.rssi !== undefined ? { rssi: parsed.rssi } : {}),
         ...(paths.length > 0 ? { paths } : {}),
       },
     };

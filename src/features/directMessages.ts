@@ -93,7 +93,8 @@ export function encodeSendDmText(opts: {
 // RESP_CONTACT_MSG_RECV_V3 frame (firmware: companion_radio/MyMesh.cpp):
 //   [0]: 0x10
 //   [1]: snr*4 (signed int8) — divide by 4 for dB
-//   [2..3]: 2B reserved
+//   [2]: rssi (signed int8) — dBm as measured on the LoRa frame
+//   [3]: 1B reserved
 //   [4..9]: 6B sender public-key prefix
 //   [10]: path_len (0xFF = direct/no flood)
 //   [11]: txt_type
@@ -102,6 +103,8 @@ export function encodeSendDmText(opts: {
 //   [16..] or [20..]: text body
 export interface ContactMsgV3 {
   snrDb: number;
+  /** Absent on V1 frames, which carry no signal header at all. */
+  rssi?: number;
   senderPubKeyPrefixHex: string;
   pathLen: number;
   txtType: number;
@@ -114,6 +117,7 @@ export interface ContactMsgV3 {
 export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
   if (frame.length < 16) return null;
   const snrRaw = frame.readInt8(1);
+  const rssi = frame.readInt8(2);
   const senderPubKeyPrefixHex = frame.subarray(4, 10).toString('hex');
   const pathLen = frame[10];
   const txtType = frame[11];
@@ -129,6 +133,7 @@ export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
   const body = frame.subarray(bodyStart).toString('utf8').replace(/\0+$/, '');
   return {
     snrDb: snrRaw / 4,
+    rssi,
     senderPubKeyPrefixHex,
     pathLen,
     txtType,
@@ -456,7 +461,9 @@ function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): voi
     fromPublicKeyHex: contact.publicKeyHex,
     body: parsed.body,
     state: 'received',
-    meta: { snr: parsed.snrDb },
+    // rssi is absent on V1 frames — keep the key off the object rather than
+    // publishing an `rssi: undefined`.
+    meta: { snr: parsed.snrDb, ...(parsed.rssi !== undefined ? { rssi: parsed.rssi } : {}) },
   };
   ctx.state.insertMessage(message);
   ctx.events.emit('messageUpserted', message);

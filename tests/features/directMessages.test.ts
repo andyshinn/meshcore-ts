@@ -69,6 +69,22 @@ describe('directMessages: decodeContactMsgV3', () => {
     expect(msg?.timestampUnix).toBe(99);
     expect(msg?.body).toBe('ping');
   });
+
+  it('reads the rssi byte that sits between snr and the reserved byte', () => {
+    const body = Buffer.from('ping', 'utf8');
+    const frame = Buffer.alloc(16 + body.length);
+    frame[0] = 0x10;
+    frame.writeInt8(-4, 1); // snr*4
+    frame.writeInt8(-112, 2); // rssi dBm — signed, always negative in practice
+    Buffer.from('aabbccddeeff', 'hex').copy(frame, 4);
+    frame[10] = 0xff;
+    frame[11] = 0;
+    frame.writeUInt32LE(99, 12);
+    body.copy(frame, 16);
+    const msg = decodeContactMsgV3(frame);
+    expect(msg?.rssi).toBe(-112);
+    expect(msg?.snrDb).toBe(-1); // rssi doesn't disturb the snr read
+  });
 });
 
 describe('directMessages: decodeContactMsgV1 (legacy, no snr prefix)', () => {
