@@ -7,6 +7,27 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.7.1
+
+_`meta.rssi` is finally populated on inbound messages._
+
+### Fixed
+
+- **`Message.meta.rssi` was never populated.** The V3 message frames carry both
+  link metrics in one header — `[code][snr*4 i8][rssi i8][1B rsv][…]` — but
+  `decodeChannelMsgV3` and `decodeContactMsgV3` read byte 1 for SNR and then
+  jumped straight to byte 4, so the RSSI byte was dropped. RSSI reached
+  `rawPacket` (whose parsers do read byte 2) but never a `Message`, so
+  `MessageMeta.rssi` — which has been declared all along — was always
+  `undefined`. Both V3 decoders now read byte 2 and include it in `meta` at the
+  two `messageUpserted` emit sites, alongside `snr`.
+
+  `rssi` is optional on `ChannelMsgV3` / `ContactMsgV3` and spread
+  conditionally. V1 frames carry no signal header at all (which is why they
+  hardcode `snrDb` 0), so a V1-decoded message has no RSSI to report — and
+  omitting the key rather than setting it `undefined` keeps a V1 re-receipt
+  from wiping an RSSI that an earlier V3 reception merged onto the same row.
+
 ## 0.7.0
 
 _Syncing contacts stops being quadratic, and consumers get per-contact deltas._
