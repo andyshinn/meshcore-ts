@@ -34,17 +34,24 @@ export function encodeSendChannelText(opts: {
 // onChannelMessageRecv):
 //   [0]: 0x11
 //   [1]: snr*4 (signed int8) — divide by 4 for dB
-//   [2]: rssi (signed int8) — dBm as measured on the LoRa frame
-//   [3]: 1B reserved
+//   [2..3]: 2B reserved — hardcoded 0 by the firmware, NOT rssi (see below)
 //   [4]: channel index (slot on the radio)
 //   [5]: path_len (hop count for flood; 0xFF for direct)
 //   [6]: txt_type
 //   [7..10]: timestamp uint32 LE (UNIX seconds)
 //   [11..]: text body (often prefixed "name: ")
+// Byte 2 is NOT rssi, however tempting the symmetry with snr looks. MyMesh.cpp
+// emits `out_frame[i++] = 0; // reserved1` then `= 0; // reserved2` for 0x10,
+// 0x11 and 0x1B alike, and companion_protocol.md documents "Bytes 2-3:
+// Reserved" with pseudocode that does `offset += 3  # Skip SNR + reserved`.
+// The [code][snr*4][rssi][0xFF] shape belongs to PUSH_RAW_DATA (0x84) — see
+// rawData.ts — alongside 0x88 and 0x8e; those are the only frames the firmware
+// fills from getLastRSSI(). Reading byte 2 here yields a constant 0, and since
+// consumers gate on `!= null` that renders as a full-strength "0 dBm" reading
+// on every received message. 0.7.1 shipped exactly that; 0.7.2 reverted it.
+// Per-message RSSI has to come from correlating the separate 0x88 RX-log push.
 export interface ChannelMsgV3 {
   snrDb: number;
-  /** Absent on V1 frames, which carry no signal header at all. */
-  rssi?: number;
   channelIdx: number;
   pathLen: number;
   txtType: number;
@@ -58,7 +65,6 @@ export interface ChannelMsgV3 {
 export function decodeChannelMsgV3(frame: Buffer): ChannelMsgV3 | null {
   if (frame.length < 11) return null;
   const snrRaw = frame.readInt8(1);
-  const rssi = frame.readInt8(2);
   const channelIdx = frame[4];
   const pathLen = frame[5];
   const txtType = frame[6];
@@ -67,7 +73,6 @@ export function decodeChannelMsgV3(frame: Buffer): ChannelMsgV3 | null {
   const { senderName, cleanBody } = splitSenderPrefix(body);
   return {
     snrDb: snrRaw / 4,
-    rssi,
     channelIdx,
     pathLen,
     txtType,
@@ -209,9 +214,6 @@ export const channelMessagesFeature: Feature = {
       state: 'received',
       meta: {
         snr: finalSnr,
-        // Absent on V1 frames — keep the key off the object rather than
-        // publishing an `rssi: undefined`.
-        ...(parsed.rssi !== undefined ? { rssi: parsed.rssi } : {}),
         ...(paths.length > 0 ? { paths } : {}),
       },
     };

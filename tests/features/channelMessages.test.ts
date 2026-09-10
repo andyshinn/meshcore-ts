@@ -32,20 +32,27 @@ describe('channelMessages: decodeChannelMsgV3', () => {
     expect(msg?.cleanBody).toBe('hello');
   });
 
-  it('reads the rssi byte that sits between snr and the reserved byte', () => {
+  // Regression guard for 0.7.1, which read byte 2 as rssi. The firmware
+  // hardcodes bytes 2-3 to 0, so that produced a constant `rssi: 0` and a
+  // full-bar "0 dBm" reading downstream. The non-zero reserved bytes below are
+  // deliberately hostile: if a decoder ever reads them again, this test fails
+  // instead of the bug shipping.
+  it('does not surface bytes 2-3 — they are reserved, not rssi', () => {
     const body = Buffer.from('Alice: hello', 'utf8');
     const frame = Buffer.alloc(11 + body.length);
     frame[0] = 0x11;
-    frame.writeInt8(50, 1); // snr*4
-    frame.writeInt8(-95, 2); // rssi dBm — signed, always negative in practice
+    frame.writeInt8(50, 1); // snr*4 = 50 → 12.5 dB
+    frame.writeInt8(-95, 2); // reserved1 — a plausible-looking rssi, ignored
+    frame.writeInt8(-95, 3); // reserved2
     frame[4] = 3;
     frame[5] = 0xff;
     frame[6] = 0;
     frame.writeUInt32LE(1_700_000_000, 7);
     body.copy(frame, 11);
     const msg = decodeChannelMsgV3(frame);
-    expect(msg?.rssi).toBe(-95);
-    expect(msg?.snrDb).toBe(12.5); // rssi doesn't disturb the snr read
+    expect(msg).not.toBeNull();
+    expect(msg).not.toHaveProperty('rssi');
+    expect(msg?.snrDb).toBe(12.5); // and the reserved bytes don't disturb snr
   });
 
   it('returns null below 11 bytes', () => {

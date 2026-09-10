@@ -161,6 +161,12 @@ export interface MessagePath {
 
 export interface MessageMeta {
   hops?: number;
+  /** Per-message RSSI. **Nothing populates this yet.** The V3 message frames
+   *  carry SNR but no RSSI — their bytes 2-3 are firmware `reserved1`/
+   *  `reserved2`, hardcoded 0 (0.7.1 misread byte 2 as rssi; 0.7.2 reverted
+   *  it). Real per-reception RSSI arrives only on the 0x84/0x88/0x8e pushes,
+   *  so filling this in means correlating the 0x88 RX-log push the way
+   *  `paths` already is. Prefer `snr` until then. */
   rssi?: number;
   snr?: number;
   /** Decoded route(s) the message travelled, populated when a matching mesh
