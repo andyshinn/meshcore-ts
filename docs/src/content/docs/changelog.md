@@ -7,6 +7,42 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.7.2
+
+_Reverts 0.7.1: the V3 message header byte read as RSSI is a firmware reserved
+byte, so 0.7.1 published `rssi: 0` on every received message._
+
+### Fixed
+
+- **`Message.meta.rssi` is no longer populated from a reserved byte.** 0.7.1
+  read byte 2 of `RESP_CONTACT_MSG_RECV_V3` (0x10) and
+  `RESP_CHANNEL_MSG_RECV_V3` (0x11) as RSSI. It is not RSSI. The firmware emits
+  `out_frame[i++] = 0; // reserved1` followed by `= 0; // reserved2` for 0x10,
+  0x11 and 0x1B alike (`companion_radio/MyMesh.cpp`), and the official
+  `companion_protocol.md` documents "Bytes 2-3: Reserved", with pseudocode that
+  does `offset += 3  # Skip SNR + reserved`.
+
+  The `[code][snr*4 i8][rssi i8][0xFF]` header 0.7.1 assumed belongs to
+  `PUSH_RAW_DATA` (0x84) — the parsers in `rawData.ts` were right all along —
+  along with 0x88 and 0x8e. Those are the only frames the firmware fills from
+  `getLastRSSI()`, which is why RSSI has always reached the packet log but
+  never a `Message`.
+
+  Because byte 2 is a compile-time `0`, 0.7.1 published `rssi: 0` on **every**
+  received V3 message, and `0 !== undefined` meant the conditional spread always
+  emitted the key. Consumers that gate on `rssi != null` therefore rendered a
+  full-strength "0 dBm" reading on every message — worse than the absent value
+  the change set out to fix. **Upgrade from 0.7.1; it has been deprecated on
+  npm.**
+
+  `MessageMeta.rssi` remains declared but unpopulated. Filling it in means
+  correlating the separate 0x88 RX-log push, the way `meta.paths` already is —
+  the approach `meshcore_py` takes. Prefer `meta.snr`, which is real.
+
+  Three regression tests now build V3 frames with deliberately non-zero
+  reserved bytes and assert no `rssi` surfaces, so re-reading byte 2 fails in
+  CI rather than on a radio.
+
 ## 0.7.1
 
 _`meta.rssi` is finally populated on inbound messages._

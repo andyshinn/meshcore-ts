@@ -70,20 +70,25 @@ describe('directMessages: decodeContactMsgV3', () => {
     expect(msg?.body).toBe('ping');
   });
 
-  it('reads the rssi byte that sits between snr and the reserved byte', () => {
+  // Regression guard for 0.7.1 — see the matching test in channelMessages.
+  // Bytes 2-3 are firmware reserved (hardcoded 0), not rssi; the non-zero
+  // values here fail loudly if a decoder starts reading them again.
+  it('does not surface bytes 2-3 — they are reserved, not rssi', () => {
     const body = Buffer.from('ping', 'utf8');
     const frame = Buffer.alloc(16 + body.length);
     frame[0] = 0x10;
-    frame.writeInt8(-4, 1); // snr*4
-    frame.writeInt8(-112, 2); // rssi dBm — signed, always negative in practice
+    frame.writeInt8(-4, 1); // snr*4 = -4 → -1 dB
+    frame.writeInt8(-112, 2); // reserved1 — a plausible-looking rssi, ignored
+    frame.writeInt8(-112, 3); // reserved2
     Buffer.from('aabbccddeeff', 'hex').copy(frame, 4);
     frame[10] = 0xff;
     frame[11] = 0;
     frame.writeUInt32LE(99, 12);
     body.copy(frame, 16);
     const msg = decodeContactMsgV3(frame);
-    expect(msg?.rssi).toBe(-112);
-    expect(msg?.snrDb).toBe(-1); // rssi doesn't disturb the snr read
+    expect(msg).not.toBeNull();
+    expect(msg).not.toHaveProperty('rssi');
+    expect(msg?.snrDb).toBe(-1); // and the reserved bytes don't disturb snr
   });
 });
 

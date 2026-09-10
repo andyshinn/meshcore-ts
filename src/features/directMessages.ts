@@ -93,18 +93,25 @@ export function encodeSendDmText(opts: {
 // RESP_CONTACT_MSG_RECV_V3 frame (firmware: companion_radio/MyMesh.cpp):
 //   [0]: 0x10
 //   [1]: snr*4 (signed int8) — divide by 4 for dB
-//   [2]: rssi (signed int8) — dBm as measured on the LoRa frame
-//   [3]: 1B reserved
+//   [2..3]: 2B reserved — hardcoded 0 by the firmware, NOT rssi (see below)
 //   [4..9]: 6B sender public-key prefix
 //   [10]: path_len (0xFF = direct/no flood)
 //   [11]: txt_type
 //   [12..15]: timestamp uint32 LE (UNIX seconds)
 //   [16..19]: sender_prefix 4B (ONLY when txt_type == SIGNED_PLAIN)
 //   [16..] or [20..]: text body
+// Byte 2 is NOT rssi, however tempting the symmetry with snr looks. MyMesh.cpp
+// emits `out_frame[i++] = 0; // reserved1` then `= 0; // reserved2` for 0x10,
+// 0x11 and 0x1B alike, and companion_protocol.md documents "Bytes 2-3:
+// Reserved" with pseudocode that does `offset += 3  # Skip SNR + reserved`.
+// The [code][snr*4][rssi][0xFF] shape belongs to PUSH_RAW_DATA (0x84) — see
+// rawData.ts — alongside 0x88 and 0x8e; those are the only frames the firmware
+// fills from getLastRSSI(). Reading byte 2 here yields a constant 0, and since
+// consumers gate on `!= null` that renders as a full-strength "0 dBm" reading
+// on every received message. 0.7.1 shipped exactly that; 0.7.2 reverted it.
+// Per-message RSSI has to come from correlating the separate 0x88 RX-log push.
 export interface ContactMsgV3 {
   snrDb: number;
-  /** Absent on V1 frames, which carry no signal header at all. */
-  rssi?: number;
   senderPubKeyPrefixHex: string;
   pathLen: number;
   txtType: number;
@@ -117,7 +124,6 @@ export interface ContactMsgV3 {
 export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
   if (frame.length < 16) return null;
   const snrRaw = frame.readInt8(1);
-  const rssi = frame.readInt8(2);
   const senderPubKeyPrefixHex = frame.subarray(4, 10).toString('hex');
   const pathLen = frame[10];
   const txtType = frame[11];
@@ -133,7 +139,6 @@ export function decodeContactMsgV3(frame: Buffer): ContactMsgV3 | null {
   const body = frame.subarray(bodyStart).toString('utf8').replace(/\0+$/, '');
   return {
     snrDb: snrRaw / 4,
-    rssi,
     senderPubKeyPrefixHex,
     pathLen,
     txtType,
@@ -461,9 +466,7 @@ function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): voi
     fromPublicKeyHex: contact.publicKeyHex,
     body: parsed.body,
     state: 'received',
-    // rssi is absent on V1 frames — keep the key off the object rather than
-    // publishing an `rssi: undefined`.
-    meta: { snr: parsed.snrDb, ...(parsed.rssi !== undefined ? { rssi: parsed.rssi } : {}) },
+    meta: { snr: parsed.snrDb },
   };
   ctx.state.insertMessage(message);
   ctx.events.emit('messageUpserted', message);
