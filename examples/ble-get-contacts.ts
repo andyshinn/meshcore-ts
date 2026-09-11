@@ -9,7 +9,7 @@ const RX = toNoble(Transports.NORDIC_UART.rxWrite); // host → device
 const TX = toNoble(Transports.NORDIC_UART.txNotify); // device → host
 
 async function main(): Promise<void> {
-  await noble.waitForPoweredOn();
+  await noble.waitForPoweredOnAsync();
 
   console.log('Scanning for a MeshCore device…');
   await noble.startScanningAsync([SERVICE], false);
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
       void txChar.subscribeAsync();
     },
     watchState: (onState) => {
-      peripheral.once('disconnect', (_error: string) => onState('idle'));
+      peripheral.once('disconnect', () => onState('idle'));
     },
   });
 
