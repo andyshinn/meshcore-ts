@@ -14,7 +14,7 @@ const khz = (hz: number): string => `${(hz / 1000).toFixed(1)} kHz`;
 const coord = (v: number | null): string => (v === null ? 'not set' : v.toFixed(6));
 
 async function main(): Promise<void> {
-  await noble.waitForPoweredOn();
+  await noble.waitForPoweredOnAsync();
 
   console.log('Scanning for a MeshCore device…');
   await noble.startScanningAsync([SERVICE], false);
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
       void txChar.subscribeAsync();
     },
     watchState: (onState) => {
-      peripheral.once('disconnect', (_error: string) => onState('idle'));
+      peripheral.once('disconnect', () => onState('idle'));
     },
   });
 

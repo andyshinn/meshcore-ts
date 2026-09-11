@@ -16,8 +16,7 @@
     "outDir": "dist",
     "types": ["node"],
     "skipLibCheck": true,
-    "noEmit": true,
-    "ignoreDeprecations": "6.0"
+    "noEmit": true
   },
   "include": ["src", "tests"]
 }

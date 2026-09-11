@@ -147,7 +147,7 @@ See [`examples/README.md`](examples/README.md) for the full list. The
 ## Scripts
 
 ```
-pnpm build      # tsup → ESM + CJS + .d.ts
+pnpm build      # tsdown → ESM + CJS + .d.ts
 pnpm test       # vitest
 pnpm typecheck  # tsc --noEmit
 pnpm lint       # biome

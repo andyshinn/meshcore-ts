@@ -16,9 +16,14 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "main": "./dist/index.cjs",
@@ -28,7 +33,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit && pnpm typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json",
@@ -47,14 +52,14 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.0",
-    "@stoprocent/noble": "^1.12.0",
+    "@biomejs/biome": "2.5.12",
+    "@stoprocent/noble": "^2.8.0",
     "@types/node": "25.9.3",
-    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/coverage-v8": "5.0.0",
     "serialport": "^13.0.0",
-    "tsup": "8.5.1",
-    "tsx": "^4.19.2",
-    "typescript": "6.0.3",
-    "vitest": "4.1.8"
+    "tsdown": "0.23.0",
+    "tsx": "^4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
   }
 }
