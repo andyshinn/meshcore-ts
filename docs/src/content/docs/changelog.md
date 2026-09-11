@@ -32,8 +32,8 @@ byte, so 0.7.1 published `rssi: 0` on every received message._
   received V3 message, and `0 !== undefined` meant the conditional spread always
   emitted the key. Consumers that gate on `rssi != null` therefore rendered a
   full-strength "0 dBm" reading on every message — worse than the absent value
-  the change set out to fix. **Upgrade from 0.7.1; it has been deprecated on
-  npm.**
+  the change set out to fix. **Upgrade from 0.7.1 — it reports a bogus RSSI on
+  every received message.**
 
   `MessageMeta.rssi` remains declared but unpopulated. Filling it in means
   correlating the separate 0x88 RX-log push, the way `meta.paths` already is —
@@ -44,6 +44,14 @@ byte, so 0.7.1 published `rssi: 0` on every received message._
   CI rather than on a radio.
 
 ## 0.7.1
+
+:::caution[Retracted — superseded by 0.7.2]
+**The frame layout described below is wrong, and this release should not be
+used.** Bytes 2-3 of the V3 message frames are firmware reserved bytes
+(hardcoded 0), not `[rssi][1B rsv]`. Reading byte 2 made `meta.rssi` a constant
+`0` on every received message. See [0.7.2](#072). The entry is kept as written
+for the historical record.
+:::
 
 _`meta.rssi` is finally populated on inbound messages._
 
