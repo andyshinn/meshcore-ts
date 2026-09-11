@@ -127,6 +127,40 @@ for a reconnect._
   folded into `AutoAddConfig` and written back on every successful
   `setOtherParams`.
 
+- **`repeaterStatus` fields now match the firmware's `RepeaterStats` struct.**
+  The repeater memcpy's the struct straight onto the wire
+  (`examples/simple_repeater/MyMesh.h`), so the payload is packed, naturally
+  aligned, little-endian, with no padding. We were decoding
+  `battery u32 / tx_queue u32 / free_queue u32 / last_rssi i16 / …` — the
+  widths were wrong from byte 2 onward, and `free_queue` is not a field at all.
+  The real head of the struct is `u16 batt_milli_volts`,
+  `u16 curr_tx_queue_len`, `i16 noise_floor`, `i16 last_rssi`, then the u32
+  counters.
+
+  Battery appeared to work only because an idle repeater's TX queue is zero:
+  reading `[0..3]` as a u32 picked up `batt_mv | (tx_queue << 16)`, which equals
+  `batt_mv` exactly when the queue is empty. On a busy repeater with 3 queued
+  packets, a 4.02 V battery was reported as 200.628 V. Every field after it —
+  RSSI, packet counts, airtime, uptime, dup counters — was read from the wrong
+  offset and was garbage regardless of queue depth.
+
+  Fields added, previously missing entirely: **Noise floor** (`i16`, dBm),
+  **RX airtime** (`u32`, seconds) and **RX errors** (`u32`). Renamed:
+  `Airtime` → **TX airtime** (it is `total_air_time_secs`, the TX side — the
+  new `RX airtime` would otherwise be ambiguous); `Queue-full evts` →
+  **Error events** (the firmware renamed `n_full_events` to `err_events`).
+  Removed: `Free queue`, which never existed. `Direct dups` / `Flood dups` are
+  `u16`, not `u8`, so counts above 255 no longer wrap.
+
+  Frames are decoded field by field against the length actually received, so a
+  pre-v1.12.0 repeater's 52-byte frame (no `n_recv_errors`) still decodes
+  everything up to `RX airtime` instead of throwing.
+
+  The old unit test built its fixture to the same wrong layout, so it confirmed
+  the bug rather than catching it. It now builds frames from the firmware struct
+  — including a non-zero TX queue, which is what exposes the battery error, and
+  a legacy 52-byte frame.
+
 ### Changed
 
 - **`MeshCoreSession.setOtherParams` takes an optional third argument,
