@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { CMD, type STATS_TYPE } from './codes';
+import { CMD, PERM_BITS, type STATS_TYPE } from './codes';
 import { parsePublicKey } from './pubkey';
 
 // PUSH_LOGIN_SUCCESS (firmware: companion_radio/MyMesh.cpp:676-700). Two
@@ -28,8 +28,11 @@ export function parseLoginSuccess(frame: Buffer): LoginSuccess | null {
       serverTagHex: frame.subarray(8, 12).toString('hex'),
       aclPermissions: frame[12],
       firmwareVerLevel: frame[13],
-      // Firmware defines PERM_ACL_ADMIN = 3 (0b11) and PERM_ACL_READ_ONLY = 1.
-      // Read-only (0x01) must NOT be treated as admin; admin requires both bits set.
+      // frame[1] is NOT a role byte — the repeater firmware sends it as a plain
+      // boolean (`reply_data[6] = client->isAdmin() ? 1 : 0`), so testing its low
+      // bit is correct here. frame[12] IS the raw ACL role byte, where the low 2
+      // bits are a VALUE (PERM_ACL_ADMIN = 3): read-only (1) and read-write (2)
+      // must not be read as admin, hence the mask-and-compare.
       isAdmin: (permissions & 0x01) !== 0 || (frame[12] & 0x03) === 0x03,
     };
   }
@@ -135,11 +138,38 @@ export function parseTraceData(frame: Buffer): TraceData | null {
 // ACL list response body (inside PUSH_BINARY_RESPONSE payload, after the 4B
 // tag we already stripped in parseBinaryResponse). Repeating 7-byte entries:
 //   [6B pubkey prefix][1B perms]
-// Firmware: MyMeshRepeater.cpp:265-277.
+// Firmware: simple_repeater/MyMesh.cpp handleRequest(REQ_TYPE_GET_ACCESS_LIST).
+
+/** ACL role, decoded from the low 2 bits of a permissions byte. Mirrors the
+ *  firmware's helpers/ClientACL.h PERM_ACL_GUEST/READ_ONLY/READ_WRITE/ADMIN. */
+export type AclRole = 'guest' | 'readOnly' | 'readWrite' | 'admin';
+
+/** Decode the ACL role out of a raw permissions byte. The low 2 bits hold a
+ *  role VALUE (0..3), not independent flag bits — the firmware's own test is
+ *  `(permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_ADMIN`. Bits above the role
+ *  mask are reserved and ignored. */
+export function decodeAclRole(permissions: number): AclRole {
+  switch (permissions & PERM_BITS.ACL_ROLE_MASK) {
+    case PERM_BITS.ACL_ADMIN:
+      return 'admin';
+    case PERM_BITS.ACL_READ_WRITE:
+      return 'readWrite';
+    case PERM_BITS.ACL_READ_ONLY:
+      return 'readOnly';
+    default:
+      return 'guest';
+  }
+}
+
 export interface AclEntry {
   pubKeyPrefixHex: string;
+  /** Raw permissions byte as sent by the repeater (role bits + reserved bits). */
   permissions: number;
+  /** Decoded role — the authoritative reading of the low 2 bits. */
+  role: AclRole;
+  /** Convenience for `role === 'admin'` (PERM_ACL_ADMIN, role bits 0b11). */
   isAdmin: boolean;
+  /** Convenience for `role === 'guest'` (PERM_ACL_GUEST, role bits 0b00). */
   isGuest: boolean;
 }
 
@@ -147,11 +177,20 @@ export function parseAclList(payload: Buffer): AclEntry[] {
   const out: AclEntry[] = [];
   for (let i = 0; i + 7 <= payload.length; i += 7) {
     const perms = payload[i + 6];
+    // Deleted entries carry permissions == 0 — the firmware skips those when it
+    // builds the list, and trailing padding decodes identically. meshcore_py's
+    // parse_acl additionally drops all-zero pubkey prefixes; do both so padding
+    // never surfaces as a bogus guest entry.
+    if (perms === 0) continue;
+    const pubKeyPrefixHex = payload.subarray(i, i + 6).toString('hex');
+    if (pubKeyPrefixHex === '000000000000') continue;
+    const role = decodeAclRole(perms);
     out.push({
-      pubKeyPrefixHex: payload.subarray(i, i + 6).toString('hex'),
+      pubKeyPrefixHex,
       permissions: perms,
-      isAdmin: (perms & 0x01) !== 0,
-      isGuest: (perms & 0x02) !== 0,
+      role,
+      isAdmin: role === 'admin',
+      isGuest: role === 'guest',
     });
   }
   return out;

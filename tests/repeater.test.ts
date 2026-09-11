@@ -9,6 +9,8 @@ import {
   buildSendStatusReq,
   buildSendTelemetryReq,
   buildSendTracePath,
+  decodeAclRole,
+  parseAclList,
   parseAnonOwnerInfo,
   parseAvgMinMax,
   parseLoginSuccess,
@@ -526,5 +528,93 @@ describe('parseLoginSuccess (FIX B — 14-byte new form)', () => {
 
   it('returns null for frames shorter than 8 bytes', () => {
     expect(parseLoginSuccess(Buffer.alloc(7))).toBeNull();
+  });
+});
+
+// ---- parseAclList: 2-bit role value + deleted-entry filtering ----------
+describe('parseAclList', () => {
+  // One 7-byte ACL entry: [6B pubkey prefix][1B permissions].
+  const entry = (prefixHex: string, perms: number) => Buffer.concat([Buffer.from(prefixHex, 'hex'), Buffer.from([perms])]);
+
+  it('decodes PERM_ACL_GUEST (0) — guest, not admin', () => {
+    // Role bits 0b00 plus a reserved high bit: a permissions byte of exactly 0
+    // means "deleted" and is filtered out, so guest needs another bit set.
+    const res = parseAclList(entry('aabbccddeeff', 0x80));
+    expect(res).toHaveLength(1);
+    expect(res[0].role).toBe('guest');
+    expect(res[0].isGuest).toBe(true);
+    expect(res[0].isAdmin).toBe(false);
+    expect(res[0].permissions).toBe(0x80);
+    expect(res[0].pubKeyPrefixHex).toBe('aabbccddeeff');
+  });
+
+  it('decodes PERM_ACL_READ_ONLY (1) — neither admin nor guest', () => {
+    const res = parseAclList(entry('010203040506', 0x01));
+    expect(res).toHaveLength(1);
+    expect(res[0].role).toBe('readOnly');
+    expect(res[0].isAdmin).toBe(false); // regression: used to report admin
+    expect(res[0].isGuest).toBe(false);
+  });
+
+  it('decodes PERM_ACL_READ_WRITE (2) — neither admin nor guest', () => {
+    const res = parseAclList(entry('010203040506', 0x02));
+    expect(res).toHaveLength(1);
+    expect(res[0].role).toBe('readWrite');
+    expect(res[0].isAdmin).toBe(false);
+    expect(res[0].isGuest).toBe(false); // regression: used to report guest
+  });
+
+  it('decodes PERM_ACL_ADMIN (3) — admin only, never both', () => {
+    const res = parseAclList(entry('010203040506', 0x03));
+    expect(res).toHaveLength(1);
+    expect(res[0].role).toBe('admin');
+    expect(res[0].isAdmin).toBe(true);
+    expect(res[0].isGuest).toBe(false); // regression: used to report both
+  });
+
+  it('ignores reserved bits above the 2-bit role mask', () => {
+    const res = parseAclList(entry('010203040506', 0xf3)); // 0b1111_0011 → admin
+    expect(res[0].role).toBe('admin');
+    expect(res[0].isAdmin).toBe(true);
+    expect(res[0].permissions).toBe(0xf3); // raw byte preserved
+  });
+
+  it('skips deleted entries (permissions == 0)', () => {
+    const payload = Buffer.concat([
+      entry('aaaaaaaaaaaa', 0x03),
+      entry('bbbbbbbbbbbb', 0x00), // deleted — firmware skips these too
+      entry('cccccccccccc', 0x01),
+    ]);
+    expect(parseAclList(payload).map((e) => e.pubKeyPrefixHex)).toEqual(['aaaaaaaaaaaa', 'cccccccccccc']);
+  });
+
+  it('skips all-zero pubkey prefixes (padding), matching meshcore_py parse_acl', () => {
+    const payload = Buffer.concat([entry('000000000000', 0x03), entry('aaaaaaaaaaaa', 0x03)]);
+    const res = parseAclList(payload);
+    expect(res).toHaveLength(1);
+    expect(res[0].pubKeyPrefixHex).toBe('aaaaaaaaaaaa');
+  });
+
+  it('returns an empty list for an all-zero (padding-only) payload', () => {
+    expect(parseAclList(Buffer.alloc(21))).toEqual([]);
+  });
+
+  it('parses multiple entries and ignores a trailing partial entry', () => {
+    const payload = Buffer.concat([
+      entry('aaaaaaaaaaaa', 0x03),
+      entry('bbbbbbbbbbbb', 0x02),
+      Buffer.from([0xcc, 0xcc, 0xcc]), // 3 stray bytes — not a whole entry
+    ]);
+    const res = parseAclList(payload);
+    expect(res).toHaveLength(2);
+    expect(res[0].role).toBe('admin');
+    expect(res[1].role).toBe('readWrite');
+  });
+
+  it('decodeAclRole maps all four role values', () => {
+    expect(decodeAclRole(0)).toBe('guest');
+    expect(decodeAclRole(1)).toBe('readOnly');
+    expect(decodeAclRole(2)).toBe('readWrite');
+    expect(decodeAclRole(3)).toBe('admin');
   });
 });
