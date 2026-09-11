@@ -79,8 +79,9 @@ export class DiscoveredStore {
    *  first sighting; preserves it (and the existing favourite flag) on later
    *  adverts. `onRadio` is set by the caller per context.
    *
-   *  `heardLive` distinguishes a real PUSH_NEW_ADVERT (we actually heard the
-   *  node) from a GET_CONTACTS resync (the device listing what it stores).
+   *  `heardLive` distinguishes a live advert — a PUSH_ADVERT (0x80) or a
+   *  PUSH_NEW_ADVERT (0x8a), where we actually heard the node — from a
+   *  GET_CONTACTS resync (the device listing what it stores).
    *  `last_heard_ms` is our-clock and only advances on a live advert — it never
    *  moves on a resync (committing a contact to the radio can't bump it). */
   upsert(record: DiscoveredUpsertRecord, opts: { onRadio: boolean; nowMs: number; heardLive: boolean }): void {

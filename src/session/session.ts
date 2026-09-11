@@ -1234,14 +1234,27 @@ export class MeshCoreSession {
     return true;
   }
 
-  /** Push telemetry policy + multi-acks + advert-location-policy as one frame.
-   *  The advert-location-policy flag mirrors `DeviceIdentity.sharePositionInAdvert`
-   *  and `TelemetryPolicy` fields drive the rest. */
+  /** Push manual-add flag + telemetry policy + multi-acks + advert-location-policy
+   *  as one frame. The advert-location-policy flag mirrors
+   *  `DeviceIdentity.sharePositionInAdvert` and `TelemetryPolicy` fields drive
+   *  the rest.
+   *
+   *  `manualAddContacts` is byte 1 of the frame, which is NOT reserved: the
+   *  firmware assigns `_prefs.manual_add_contacts = cmd_frame[1]` as the first
+   *  statement of its handler, before any length guard, so every write to this
+   *  command overwrites the radio's auto-add pref. Omit the argument and the
+   *  value the radio last reported (`RESP_SELF_INFO` byte 47, kept in
+   *  `AutoAddConfig.manualAddContacts`) is preserved — which is what a caller
+   *  saving telemetry or share-position wants. Pass it explicitly only to change
+   *  auto-add behaviour: bit 0 clear = auto-add everything and ignore
+   *  `autoadd_config`; bit 0 set = honour the per-kind flags. */
   async setOtherParams(
     policy: { base: 0 | 1 | 2; loc: 0 | 1 | 2; env: 0 | 1 | 2; multiAcks: number },
     sharePositionInAdvert: boolean,
+    manualAddContacts?: number,
   ): Promise<boolean> {
     if (!this.connected) return false;
+    const effectiveManualAdd = manualAddContacts ?? this.state.getAutoAddConfig().manualAddContacts;
     const ack = this.awaitAck();
     try {
       await this.writeFrame(
@@ -1251,6 +1264,7 @@ export class MeshCoreSession {
           telemetryEnv: policy.env,
           advertLocationPolicy: sharePositionInAdvert ? 1 : 0,
           multiAcks: policy.multiAcks,
+          manualAddContacts: effectiveManualAdd,
         }),
       );
     } catch (err) {
@@ -1258,9 +1272,21 @@ export class MeshCoreSession {
       this.log.warn(`setOtherParams write failed: ${(err as Error).message}`);
       return false;
     }
+    const state = this.state;
+    // Mirror the manual-add byte BEFORE the ack check, unlike the fields below.
+    // The firmware assigns `_prefs.manual_add_contacts = cmd_frame[1]` as the
+    // first statement of its handler, before every length guard, so once the
+    // frame is on the wire the radio holds this value whether or not it acks.
+    // This mirror also feeds back onto the wire — an omitted argument on the next
+    // call resends it — so letting it drift would resurrect the clobber bug.
+    const prevAutoAdd = state.getAutoAddConfig();
+    if (prevAutoAdd.manualAddContacts !== effectiveManualAdd) {
+      const nextAutoAdd = { ...prevAutoAdd, manualAddContacts: effectiveManualAdd };
+      state.setAutoAddConfig(nextAutoAdd);
+      this.events.emit('autoAddConfig', nextAutoAdd);
+    }
     const ok = (await ack.promise).ok;
     if (!ok) return false;
-    const state = this.state;
     state.setTelemetryPolicy({ ...policy });
     state.setDeviceIdentity({ ...state.getDeviceIdentity(), sharePositionInAdvert });
     this.events.emit('telemetryPolicy', state.getTelemetryPolicy());

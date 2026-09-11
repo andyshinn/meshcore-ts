@@ -191,10 +191,15 @@ export const pathDiagnosticsFeature: Feature = {
   handle: (code, frame, ctx) => {
     if (code === PUSH.PATH_UPDATED) {
       // The radio updated a contact's path (no path bytes inline). Touch the
-      // known contact's last-seen so the UI reflects liveness, mirroring the
-      // PUSH_ADVERT handling. Then schedule a non-blocking re-fetch of the full
-      // contact record so the updated out_path becomes visible without waiting
-      // for the next full GET_CONTACTS sync.
+      // known contact's last-seen so the UI reflects liveness. Then schedule a
+      // non-blocking re-fetch of the full contact record so the updated out_path
+      // becomes visible without waiting for the next full GET_CONTACTS sync.
+      //
+      // The refresh keeps the 'sync' default deliberately: a path update is not
+      // an advert, so it must not mark the contact heard-live. Unlike
+      // PUSH_ADVERT, this stays gated on a contact we already hold — the radio
+      // only recomputes paths for contacts in its store, so an unknown pubkey
+      // here is not the newly-auto-added case that 0x80 carries.
       const pubkeyHex = decodePathUpdated(frame);
       if (pubkeyHex) {
         const existing = ctx.state.getContact(`c:${pubkeyHex}`);

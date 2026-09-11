@@ -177,6 +177,19 @@ export function applySelfInfo(ctx: FeatureContext, frame: Buffer): SelfInfo | nu
     ctx.events.emit('deviceIdentity', nextIdentity);
   }
 
+  // Fold the radio's manual-add pref into AutoAddConfig. This is the only place
+  // the app learns the real value of `_prefs.manual_add_contacts`, and
+  // setOtherParams reads it back to avoid clobbering the pref on every
+  // telemetry / share-position save (byte 1 of CMD_SET_OTHER_PARAMS is not
+  // reserved — see `encodeSetOtherParams`). Emit only on change, matching the
+  // radioSettings / deviceIdentity handling above.
+  const prevAutoAdd = ctx.state.getAutoAddConfig();
+  if (prevAutoAdd.manualAddContacts !== parsed.manualAddContacts) {
+    const nextAutoAdd = { ...prevAutoAdd, manualAddContacts: parsed.manualAddContacts };
+    ctx.state.setAutoAddConfig(nextAutoAdd);
+    ctx.events.emit('autoAddConfig', nextAutoAdd);
+  }
+
   ctx.log.debug(`self-info: "${owner.name}" (${owner.publicKeyShort})`);
   return parsed;
 }

@@ -86,6 +86,18 @@ you can ask for an incremental sync next time instead of a full enumeration.
 rather than the merged `Contact` — it is a companion to these events, not an
 alternative.
 
+Its second argument is a `ContactSource` of `'sync'` or `'advert'`, and the
+distinction is meaningful: `'sync'` means the radio listed the contact during a
+`GET_CONTACTS` enumeration, while `'advert'` means we heard the node transmit.
+Only `'advert'` justifies a "heard live" badge or a first-heard timestamp. A
+`PUSH_ADVERT` (0x80) re-fetch reports `'advert'`; a `PUSH_PATH_UPDATED` (0x81)
+re-fetch reports `'sync'`, because a routing-path update is not an advert.
+
+Note that 0x80 is also how the radio announces a contact it has just auto-added
+— the firmware's `is_new` flag is false on the auto-add success path, so the
+148-byte `PUSH_NEW_ADVERT` (0x8a) is reserved for adverts the radio *refused* to
+store. A pubkey arriving on 0x80 may therefore be one you have never seen.
+
 There is intentionally no generic `error` event. Specific recoverable
 conditions get their own dedicated event instead — for example `contactsFull`
 fires when the radio's contact store is full and a new advert could not be

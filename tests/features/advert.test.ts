@@ -30,8 +30,40 @@ describe('advert encode', () => {
       telemetryEnv: 0,
       advertLocationPolicy: 1,
       multiAcks: 2,
+      manualAddContacts: 0,
     });
-    // [0x26][reserved 0][(0<<4)|(2<<2)|1 = 0x09][0x01][0x02]
+    // [0x26][manual_add_contacts 0][(0<<4)|(2<<2)|1 = 0x09][0x01][0x02]
     expect(hex(out)).toBe('2600090102');
+  });
+
+  it('encodeSetOtherParams puts manualAddContacts in byte 1, which the firmware does not reserve', () => {
+    const out = encodeSetOtherParams({
+      telemetryBase: 1,
+      telemetryLoc: 2,
+      telemetryEnv: 0,
+      advertLocationPolicy: 1,
+      multiAcks: 2,
+      manualAddContacts: 1,
+    });
+    // `MyMesh::handleCmdFrame` assigns `_prefs.manual_add_contacts = cmd_frame[1]` as the first
+    // statement of the CMD_SET_OTHER_PARAMS branch, before every length guard — so byte 1
+    // overwrites the radio's auto-add pref on every telemetry/share-position save. Sending a
+    // hardcoded 0 here silently flips a "selected" radio back to "auto-add everything".
+    expect(out[1]).toBe(1);
+    expect(hex(out)).toBe('2601090102');
+  });
+
+  it('encodeSetOtherParams masks manualAddContacts down to one byte', () => {
+    const out = encodeSetOtherParams({
+      telemetryBase: 1,
+      telemetryLoc: 2,
+      telemetryEnv: 0,
+      advertLocationPolicy: 1,
+      multiAcks: 2,
+      manualAddContacts: 0x1ff,
+    });
+    expect(out.length).toBe(5);
+    expect(out[1]).toBe(0xff);
+    expect(hex(out)).toBe('26ff090102');
   });
 });

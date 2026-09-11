@@ -172,9 +172,19 @@ export function decodeContactDeleted(frame: Buffer): string | null {
   return frame.subarray(1, 33).toString('hex');
 }
 
-// PUSH_ADVERT [0x80][pubkey 32B] — a KNOWN contact re-advertised (the firmware
-// sends the 148B PUSH_NEW_ADVERT only for newly-discovered contacts). Returns
-// the lowercase hex public key, or null if short.
+// PUSH_ADVERT [0x80][pubkey 32B] — the advertising node IS in the radio's contact
+// store, INCLUDING the first advert from a node the radio has just auto-added.
+// 0x80 is the only frame that ever announces a newly auto-added contact, so the
+// pubkey it carries may well be one we have never seen.
+//
+// The naming invites the opposite reading. `BaseChatMesh::onAdvertRecv` declares
+// `bool is_new = false` and never assigns it true — the auto-add success path
+// falls through to `onDiscoveredContact(*from, is_new, ...)` still carrying
+// false, and `MyMesh::onDiscoveredContact` maps false -> 0x80. The only `true`
+// values are three literals on three refusal early-returns, so the 148B
+// PUSH_NEW_ADVERT (0x8a) means the radio REFUSED to store the node.
+//
+// Returns the lowercase hex public key, or null if short.
 export function decodeAdvert(frame: Buffer): string | null {
   if (frame.length < 1 + 32) return null;
   return frame.subarray(1, 33).toString('hex');
@@ -192,6 +202,18 @@ export interface PendingContactByKey {
   publicKeyHex: string;
   resolve: (record: ContactRecord | null) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** True when `scheduleContactRefresh` issued this lookup, so its own `.then()`
+   *  will ingest the reply. An app-initiated `getContactByKey` sets this false:
+   *  it consumes the RESP_CONTACT without ingesting, so a refresh must not
+   *  suppress itself behind one. */
+  internal: boolean;
+}
+
+/** A debounced single-contact refresh in flight. `source` is the strongest
+ *  flavour seen while the timer was running — 'advert' outranks 'sync'. */
+export interface ContactRefreshEntry {
+  timer: ReturnType<typeof setTimeout>;
+  source: ContactSource;
 }
 
 /** Per-session contacts iterator + resync + getContactByKey correlation state
@@ -204,10 +226,12 @@ export interface ContactsIterRuntime {
   syncSeen: string[];
   resyncTimer: ReturnType<typeof setTimeout> | null;
   pendingContactByKey: PendingContactByKey[];
-  /** Per-pubkey debounce timers for scheduled single-contact refreshes. Keyed
+  /** Per-pubkey debounce entries for scheduled single-contact refreshes. Keyed
    *  by publicKeyHex. Prevents a burst of PUSH_ADVERT / PUSH_PATH_UPDATED for
-   *  the same contact from spamming CMD_GET_CONTACT_BY_KEY. */
-  refreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+   *  the same contact from spamming CMD_GET_CONTACT_BY_KEY. The entry carries
+   *  the source that scheduled it so a PUSH_ADVERT landing inside an already
+   *  running PUSH_PATH_UPDATED debounce still reports as heard-live. */
+  refreshTimers: Map<string, ContactRefreshEntry>;
   /** True between RESP_CONTACTS_START and RESP_END_OF_CONTACTS. While set,
    *  full-list snapshot emits are recorded as pending instead of fired. */
   bulk: boolean;
@@ -344,29 +368,62 @@ export function scheduleContactsResync(ctx: FeatureContext): void {
 }
 
 /** Debounced single-contact refresh (CMD_GET_CONTACT_BY_KEY) after a
- *  PUSH_ADVERT or PUSH_PATH_UPDATED for a known contact. The firmware updates
- *  its in-memory record (name/gps/flags on advert; out_path on path-updated)
- *  but only pushes the 32-byte pubkey, so we re-fetch the full record and
- *  ingest it so the updated fields are visible without waiting for a full sync.
+ *  PUSH_ADVERT or PUSH_PATH_UPDATED. The firmware updates its in-memory record
+ *  (name/gps/flags on advert; out_path on path-updated) but only pushes the
+ *  32-byte pubkey, so we re-fetch the full record and ingest it so the updated
+ *  fields are visible without waiting for a full sync.
+ *
+ *  The pubkey need NOT already be a known contact: a PUSH_ADVERT is also how the
+ *  radio announces a contact it has just auto-added (see `decodeAdvert`), and
+ *  this fetch is the only thing that makes such a contact appear live.
+ *
+ *  `source` flavours the eventual `ingestContact`: 'advert' marks the record
+ *  heard-live, 'sync' (the default, used by PUSH_PATH_UPDATED) does not — a
+ *  path update is not an advert.
  *
  *  Non-blocking: the fetch is fire-and-forget (no await in the frame handler).
  *  De-duplicated: a per-pubkey debounce timer ensures a burst of pushes for
  *  the same contact fires only one request. A second pending lookup for the
  *  same pubkey is also suppressed when one is already in flight. */
-export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string): void {
+export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string, source: ContactSource = 'sync'): void {
   // If there's already a pending in-flight lookup for this pubkey, skip — the
   // arriving RESP_CONTACT will be consumed by resolvePendingContactByKey and
   // then ingested below.
-  if (ctx.rt.contactsIter.pendingContactByKey.some((e) => e.publicKeyHex === publicKeyHex)) return;
-  // Debounce: if a refresh is already scheduled for this pubkey, let it fire.
-  if (ctx.rt.contactsIter.refreshTimers.has(publicKeyHex)) return;
+  //
+  // Only OUR OWN in-flight lookup counts. An app-initiated `getContactByKey` also
+  // parks a pending entry for this pubkey, but `resolvePendingContactByKey`
+  // consumes its RESP_CONTACT and returns without ingesting — so deferring to it
+  // would drop the advert entirely and defeat the whole point of this function.
+  //
+  // Known gap, deliberately left alone: an in-flight refresh scheduled by a
+  // PUSH_PATH_UPDATED swallows a PUSH_ADVERT that lands while it is out, so that
+  // contact is ingested as 'sync' and loses its heard-live flag. Closing it means
+  // carrying the source on PendingContactByKey and upgrading it mid-flight; the
+  // window is the request's round-trip rather than the 50ms debounce, and the
+  // next advert re-flags the contact anyway.
+  if (ctx.rt.contactsIter.pendingContactByKey.some((e) => e.internal && e.publicKeyHex === publicKeyHex)) return;
+  // Debounce: if a refresh is already scheduled for this pubkey, let it fire —
+  // but upgrade a 'sync' refresh to 'advert' first, so a PUSH_ADVERT arriving
+  // inside a PUSH_PATH_UPDATED's debounce window still reports as heard-live.
+  const scheduled = ctx.rt.contactsIter.refreshTimers.get(publicKeyHex);
+  if (scheduled) {
+    if (source === 'advert') scheduled.source = 'advert';
+    return;
+  }
   const timer = setTimeout(() => {
+    const entry = ctx.rt.contactsIter.refreshTimers.get(publicKeyHex);
     ctx.rt.contactsIter.refreshTimers.delete(publicKeyHex);
+    const effectiveSource = entry?.source ?? source;
     // Fire-and-forget: fetch the single contact and ingest the updated record.
-    getContactByKey(ctx, publicKeyHex)
+    getContactByKey(ctx, publicKeyHex, { internal: true })
       .then((record) => {
         if (record) {
-          ingestContact(ctx, record, 'sync');
+          // The radio answering CMD_GET_CONTACT_BY_KEY is itself proof that the
+          // radio holds this contact, whatever our own map said a moment ago.
+          // "Is it on the radio" and "did we hear it live" are independent facts;
+          // deriving the former from `source` would drop exactly the newly
+          // auto-added contact this path exists to rescue.
+          ingestContact(ctx, record, effectiveSource, { onRadio: true });
           ctx.log.debug(`refreshed contact ${publicKeyHex.slice(0, 12)} after push`);
         }
       })
@@ -374,19 +431,22 @@ export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string
         ctx.log.warn(`contact refresh failed for ${publicKeyHex.slice(0, 12)}: ${(err as Error).message}`);
       });
   }, 50);
-  ctx.rt.contactsIter.refreshTimers.set(publicKeyHex, timer);
+  ctx.rt.contactsIter.refreshTimers.set(publicKeyHex, { timer, source });
 }
 
 /** Upsert a contact from a RESP_CONTACT / PUSH_NEW_ADVERT frame. When the
  *  contact matches an existing placeholder (`c:<6-byte-prefix>`), the
  *  placeholder is removed; messages already keyed to the placeholder stay
  *  there (cheap to leave — future cleanup can migrate them). */
-export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord): void {
+export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord, opts?: { heardLiveMs?: number }): void {
   const fullKey = `c:${record.publicKeyHex}`;
   const prefix6 = record.publicKeyHex.slice(0, 12);
   const existing = ctx.state.getContact(fullKey);
-  // The radio re-pushes the full contact record on every advert; preserve
-  // local-only fields the firmware doesn't know about.
+  // A full record never arrives on a PUSH_ADVERT — that frame carries only the
+  // pubkey. A record reaches here from a GET_CONTACTS sync, from our own debounced
+  // CMD_GET_CONTACT_BY_KEY refresh, from a PUSH_NEW_ADVERT, or from the local echo
+  // after CMD_ADD_UPDATE_CONTACT. However it arrives it is the firmware's entire
+  // view of the contact, so preserve the local-only fields it doesn't know about.
   const advertOutPathHex = record.outPathLen === 0xff ? '' : record.outPathHex;
   // Don't let a stray advert that reports "no path" wipe a path the user
   // just set manually — the firmware can occasionally re-emit a contact
@@ -402,12 +462,33 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
   const newOutPathHashSize = keepManualPath ? existing?.outPathHashSize : hashSizeFromOutPathLen(record.outPathLen);
   const pathChanged = (existing?.outPathHex ?? '') !== newOutPathHex;
 
+  // `record.lastAdvertUnix` is ContactInfo.last_advert_timestamp, which the
+  // firmware copies straight off the advert packet — it is the ADVERTISING
+  // node's own RTC, not ours and not the radio's. Mesh nodes routinely run with
+  // unset or badly-skewed clocks, so this value is only a hint.
+  //
+  // Clamp it to the present first: a node whose clock reads 2031 would otherwise
+  // pin lastSeenMs to a future value that the monotonic guard below then makes
+  // permanent. Then take the max with what we already had, so an honest
+  // app-clock value (the Date.now() stamped by the PUSH_ADVERT handler ~50ms
+  // ago) is never overwritten by an older or bogus remote claim. lastSeenMs
+  // must never move backwards.
+  const advertClaimMs = record.lastAdvertUnix > 0 ? record.lastAdvertUnix * 1000 : 0;
+  const advertSeenMs = advertClaimMs > 0 ? Math.min(advertClaimMs, Date.now()) : 0;
+  // `heardLiveMs` is our own clock at the moment we heard the advert. It matters
+  // most for a contact we are creating for the first time: there is no `existing`
+  // to preserve, so without it `bestSeenMs` would collapse to the advertiser's
+  // own unverified RTC — exactly the value this guard exists to distrust.
+  const bestSeenMs = Math.max(advertSeenMs, existing?.lastSeenMs ?? 0, opts?.heardLiveMs ?? 0);
+
   const contact: Contact = {
     key: fullKey,
     publicKeyHex: record.publicKeyHex,
     name: record.name || record.publicKeyHex.slice(0, 12),
     kind: advTypeToKind(record.type),
-    lastSeenMs: record.lastAdvertUnix > 0 ? record.lastAdvertUnix * 1000 : existing?.lastSeenMs,
+    // undefined, not 0, when nothing is known — the field is optional and a
+    // spurious 0 would render as the epoch.
+    lastSeenMs: bestSeenMs > 0 ? bestSeenMs : undefined,
     hops: hopsFromOutPathLen(record.outPathLen),
     favourite: (record.flags & 0x01) !== 0,
     outPathHex: newOutPathHex || undefined,
@@ -437,25 +518,41 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord)
 
 /** Upsert a contact heard from RESP_CONTACT (sync, on-radio) or
  *  PUSH_NEW_ADVERT (live advert — on-radio only if already in the store).
- *  Always records into the discovered pool with an app-tracked first-heard. */
-export function ingestContact(ctx: FeatureContext, record: ContactRecord, source: ContactSource): void {
+ *  Always records into the discovered pool with an app-tracked first-heard.
+ *
+ *  `opts.onRadio` overrides the source-derived guess for callers that know
+ *  better. A record fetched by CMD_GET_CONTACT_BY_KEY is on the radio by
+ *  construction — the radio answered for it — even when `source` is 'advert'
+ *  and our own map had never heard of the pubkey. */
+export function ingestContact(
+  ctx: FeatureContext,
+  record: ContactRecord,
+  source: ContactSource,
+  opts?: { onRadio?: boolean },
+): void {
   const fullKey = `c:${record.publicKeyHex}`;
   const alreadyOnRadio = ctx.state.getContact(fullKey) !== null;
-  const onRadio = source === 'sync' ? true : alreadyOnRadio;
+  const onRadio = opts?.onRadio ?? (source === 'sync' ? true : alreadyOnRadio);
 
   // First-ever sighting: no row in the discovered pool yet (checked before
   // the upsert below). Only a live advert is a "discovery" — a GET_CONTACTS
   // sync is just the device listing what it already stores.
   const isNewDiscovery = source === 'advert' && ctx.state.discovered.get(record.publicKeyHex) === null;
 
+  const nowMs = Date.now();
+  const heardLive = source === 'advert';
+
   ctx.state.discovered.upsert(record, {
     onRadio,
-    nowMs: Date.now(),
-    heardLive: source === 'advert',
+    nowMs,
+    heardLive,
   });
 
   if (onRadio) {
-    upsertOnRadioContact(ctx, record);
+    // Only a live advert licenses stamping our own clock as the last-seen time;
+    // a GET_CONTACTS sync is the radio listing what it stores, which says nothing
+    // about when the node last transmitted.
+    upsertOnRadioContact(ctx, record, { heardLiveMs: heardLive ? nowMs : 0 });
   }
   emitDiscovered(ctx);
 
@@ -495,8 +592,8 @@ export function resetContactsIter(ctx: FeatureContext): void {
       entry.resolve(null);
     }
   }
-  for (const timer of ctx.rt.contactsIter.refreshTimers.values()) {
-    clearTimeout(timer);
+  for (const entry of ctx.rt.contactsIter.refreshTimers.values()) {
+    clearTimeout(entry.timer);
   }
   ctx.rt.contactsIter.refreshTimers.clear();
 }
@@ -532,8 +629,15 @@ export function failPendingContactByKey(ctx: FeatureContext): boolean {
 }
 
 /** Look up a single contact on the radio by public key (CMD_GET_CONTACT_BY_KEY).
- *  Resolves the contact record, or null when the radio doesn't have it. */
-export function getContactByKey(ctx: FeatureContext, destPublicKeyHex: string): Promise<ContactRecord | null> {
+ *  Resolves the contact record, or null when the radio doesn't have it.
+ *
+ *  `opts.internal` marks a lookup issued by `scheduleContactRefresh`, whose
+ *  `.then()` ingests the reply — see `PendingContactByKey.internal`. */
+export function getContactByKey(
+  ctx: FeatureContext,
+  destPublicKeyHex: string,
+  opts?: { internal?: boolean },
+): Promise<ContactRecord | null> {
   const frame = encodeGetContactByKey(destPublicKeyHex);
   // encodeGetContactByKey already validated the key; normalise to lowercase hex
   // for the pending-lookup match (record.publicKeyHex is lowercase from decode).
@@ -541,6 +645,7 @@ export function getContactByKey(ctx: FeatureContext, destPublicKeyHex: string): 
   return new Promise<ContactRecord | null>((resolve, reject) => {
     const entry: PendingContactByKey = {
       publicKeyHex,
+      internal: opts?.internal === true,
       resolve,
       timer: setTimeout(() => {
         removePendingContactByKey(ctx, entry);
@@ -575,7 +680,17 @@ export const contactsFeature: Feature = {
       const record = decodeContact(frame);
       // A solicited getContactByKey reply is consumed here, not folded into the
       // bulk-sync iterator (RESP_CONTACT is shared between the two).
-      if (record && resolvePendingContactByKey(ctx, record)) return;
+      if (record && resolvePendingContactByKey(ctx, record)) {
+        // ...but still count it as seen while a bulk window is open. The radio
+        // answers a CMD_GET_CONTACT_BY_KEY immediately, even mid-enumeration, so
+        // a solicited reply can interleave with the stream. RESP_END_OF_CONTACTS
+        // prunes every contact missing from `syncSeen`, and the iterator may
+        // never emit this one (it can be auto-added into an already-streamed
+        // slot). The radio answering for the key is itself proof it is stored,
+        // so recording it here can never wrongly spare a stale row.
+        if (ctx.rt.contactsIter.bulk) ctx.rt.contactsIter.syncSeen.push(record.publicKeyHex);
+        return;
+      }
       if (record) {
         ctx.rt.contactsIter.syncSeen.push(record.publicKeyHex);
         ingestContact(ctx, record, 'sync');
@@ -633,20 +748,27 @@ export const contactsFeature: Feature = {
       return;
     }
     if (code === PUSH.ADVERT) {
-      // A known contact re-advertised — touch its last-seen so the UI reflects
-      // liveness. The bare push carries only the pubkey (no timestamp), so we
+      // The advertising node IS in the radio's contact store — which includes a
+      // node the radio auto-added microseconds ago, so the pubkey may be one we
+      // have never seen (see `decodeAdvert` for why the naming reads backwards).
+      //
+      // If we already hold the contact, touch its last-seen so the UI reflects
+      // liveness: the bare push carries only the pubkey (no timestamp), so we
       // record the moment we heard it.
-      // Then schedule a non-blocking re-fetch of the full contact record so any
-      // firmware-side updates (name, GPS, flags) become visible without waiting
-      // for the next full GET_CONTACTS sync.
+      //
+      // Either way, schedule a non-blocking re-fetch of the full contact record.
+      // For a contact we know, that surfaces firmware-side updates (name, GPS,
+      // flags); for one we don't, it is the ONLY thing that makes a newly
+      // auto-added contact appear without waiting for the next full
+      // GET_CONTACTS sync — i.e. in practice, a reconnect.
       const pubkeyHex = decodeAdvert(frame);
       if (pubkeyHex) {
         const existing = ctx.state.getContact(`c:${pubkeyHex}`);
         if (existing) {
           upsertContact(ctx, { ...existing, lastSeenMs: Date.now() });
-          ctx.log.trace(`re-advert: touched ${pubkeyHex.slice(0, 12)}`);
-          scheduleContactRefresh(ctx, pubkeyHex);
+          ctx.log.trace(`advert: touched ${pubkeyHex.slice(0, 12)}`);
         }
+        scheduleContactRefresh(ctx, pubkeyHex, 'advert');
       }
       return;
     }

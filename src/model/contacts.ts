@@ -16,9 +16,10 @@ export interface DiscoveredContact {
    *  with a wrong RTC can report a time in the future or far past. Shown as the
    *  secondary "advertised" timestamp, never used for the "last heard" sort. */
   lastAdvertMs?: number;
-  /** Last time WE actually heard a live advert (our clock), ms. Set only on a
-   *  real PUSH_NEW_ADVERT, never on a GET_CONTACTS resync — so committing a
-   *  contact to the radio doesn't bump it. Undefined until first live advert. */
+  /** Last time WE actually heard a live advert (our clock), ms. Advances on any
+   *  live advert — a PUSH_ADVERT (0x80) or a PUSH_NEW_ADVERT (0x8a) — but never
+   *  on a GET_CONTACTS resync or a PUSH_PATH_UPDATED, so committing a contact to
+   *  the radio doesn't bump it. Undefined until first live advert. */
   lastHeardMs?: number;
   /** First time WE heard this pubkey (our clock), ms. Tracked app-side. */
   firstHeardMs: number;
