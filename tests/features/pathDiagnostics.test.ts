@@ -51,6 +51,13 @@ describe('decodeAdvertPath', () => {
     expect(decodeAdvertPath(frame)).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
   });
 
+  it('decodes the 0xFF flood sentinel as zero hops / no path', () => {
+    // path_len 0xFF is not a compound length: no path bytes follow, so the
+    // 6-byte frame is complete and must not be rejected as a short path.
+    const frame = Buffer.from([0x16, 0xe8, 0x03, 0x00, 0x00, 0xff]); // ts 1000, flood
+    expect(decodeAdvertPath(frame)).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
+  });
+
   it('returns null below the header, or when the path overruns the frame', () => {
     expect(decodeAdvertPath(Buffer.from([0x16, 0x00, 0x00]))).toBeNull();
     // path_len 2 (2 bytes) but only 1 byte present
@@ -74,6 +81,36 @@ describe('decodePathDiscoveryResponse', () => {
       outPathHex: '1122',
       inHops: 1,
       inPathHex: '33',
+    });
+  });
+
+  it('decodes 0xFF flood sentinels on either leg as zero hops / no path', () => {
+    const outFlood = Buffer.concat([
+      Buffer.from([0x8d, 0x00]),
+      Buffer.from('aabbccddeeff', 'hex'),
+      Buffer.from([0xff]), // out leg flooded: no path bytes
+      Buffer.from([0x01]), // in_path_len: hops 1, size 1 → 1 byte
+      Buffer.from('33', 'hex'),
+    ]);
+    expect(decodePathDiscoveryResponse(outFlood)).toEqual({
+      pubKeyPrefixHex: 'aabbccddeeff',
+      outHops: 0,
+      outPathHex: '',
+      inHops: 1,
+      inPathHex: '33',
+    });
+
+    const bothFlood = Buffer.concat([
+      Buffer.from([0x8d, 0x00]),
+      Buffer.from('aabbccddeeff', 'hex'),
+      Buffer.from([0xff, 0xff]),
+    ]);
+    expect(decodePathDiscoveryResponse(bothFlood)).toEqual({
+      pubKeyPrefixHex: 'aabbccddeeff',
+      outHops: 0,
+      outPathHex: '',
+      inHops: 0,
+      inPathHex: '',
     });
   });
 
