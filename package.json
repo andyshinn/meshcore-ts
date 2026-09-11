@@ -50,11 +50,11 @@
     "@biomejs/biome": "^2.5.12",
     "@stoprocent/noble": "^2.8.0",
     "@types/node": "25.9.3",
-    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/coverage-v8": "5.0.0",
     "serialport": "^13.0.0",
     "tsup": "8.5.1",
     "tsx": "^4.23.13",
     "typescript": "6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "5.0.0"
   }
 }
