@@ -28,7 +28,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit && pnpm typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json",
@@ -52,7 +52,7 @@
     "@types/node": "25.9.3",
     "@vitest/coverage-v8": "5.0.0",
     "serialport": "^13.0.0",
-    "tsup": "8.5.1",
+    "tsdown": "0.23.0",
     "tsx": "^4.23.13",
     "typescript": "6.0.3",
     "vitest": "5.0.0"
