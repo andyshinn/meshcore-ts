@@ -193,6 +193,57 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
     expect(updated?.lastSeenMs).toBe(NOW);
   });
 
+  it('stamps a first-seen contact with our clock, not the advertiser stale one', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+
+    // We hear the advert NOW, but the node's own RTC is a day behind. There is no
+    // existing row to preserve, so nothing but our own clock stands between
+    // last-seen and the advertiser's unverified claim.
+    deliver(transport, advert(UNKNOWN_PK));
+    await vi.advanceTimersByTimeAsync(100); // the debounce also moves the fake clock
+    deliver(transport, contactRecordFrame(UNKNOWN_PK, 'Drifty', Math.floor(NOW / 1000) - 86_400));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Our clock at the moment of ingest — a day newer than the record's claim.
+    const added = session.state.getContacts().find((c) => c.key === `c:${UNKNOWN_PK}`);
+    expect(added?.lastSeenMs).toBe(NOW + 100);
+  });
+
+  it('keeps a contact the radio answered for mid-sync when the iteration ends', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+
+    // The advert arrives first, so the lookup is already in flight when the
+    // enumeration opens.
+    deliver(transport, advert(UNKNOWN_PK));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(lookupsFor(transport, UNKNOWN_PK)).toHaveLength(1);
+
+    // RESP_CONTACTS_START [0x02][total u32]
+    const start = Buffer.alloc(5);
+    start[0] = 0x02;
+    start.writeUInt32LE(1, 1);
+    deliver(transport, start);
+
+    // The solicited reply interleaves with the stream — the firmware answers a
+    // CMD_GET_CONTACT_BY_KEY at once, even mid-enumeration.
+    deliver(transport, contactRecordFrame(UNKNOWN_PK, 'Interleaved'));
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(transport, contactRecordFrame(PK, 'Enumerated'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // RESP_END_OF_CONTACTS prunes every contact missing from syncSeen.
+    deliver(transport, Buffer.from([0x04, 0x00, 0x00, 0x00, 0x00]));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const keys = session.state.getContacts().map((c) => c.key);
+    expect(keys).toContain(`c:${PK}`);
+    expect(keys).toContain(`c:${UNKNOWN_PK}`);
+  });
+
   it('clamps an advertiser clock set in the future to the present', () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();
