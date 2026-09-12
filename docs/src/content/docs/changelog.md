@@ -161,6 +161,47 @@ for a reconnect._
   — including a non-zero TX queue, which is what exposes the battery error, and
   a legacy 52-byte frame.
 
+- **Every ACL role decoded wrong.** `parseAclList` read the permissions byte as
+  independent flag bits (`perms & 0x01` = admin, `perms & 0x02` = guest), but the
+  firmware stores a 2-bit role *value* there (`helpers/ClientACL.h`:
+  `PERM_ACL_GUEST=0`, `READ_ONLY=1`, `READ_WRITE=2`, `ADMIN=3`, with
+  `isAdmin() == ((permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_ADMIN)`). All
+  four roles came out incorrect, not just the edge cases: read-only reported as
+  admin, read-write as guest, admin as both admin *and* guest, and guest as
+  neither. Any consumer gating on `isAdmin` was granting or denying on noise.
+
+  Decoding now goes through the existing `PERM_BITS` constants. Deleted and
+  padding entries are filtered the way both producers do it — the repeater skips
+  clients with `permissions == 0` when building the list, and meshcore_py's
+  `parse_acl` drops all-zero pubkey prefixes — without which trailing padding
+  surfaced as bogus guest entries.
+
+  `parseLoginSuccess` is unaffected: its `frame[1]` genuinely is a boolean
+  (`reply_data[6] = client->isAdmin() ? 1 : 0`), and the raw role byte at
+  `frame[12]` was already masked correctly. Only its comment changed.
+
+- **A flood-routed advert was rejected instead of decoded.** The mesh `path_len`
+  byte is normally compound (low 6 bits = hop count, top 2 bits + 1 =
+  bytes-per-hop), but `0xFF` is a sentinel meaning flood / no path, with no path
+  bytes following. `pathByteLen()` unpacked it blindly as 63 hops × 4 bytes = 252
+  required bytes, so `decodeAdvertPath` threw out an otherwise valid
+  `RESP_ADVERT_PATH` frame rather than decoding it as a zero-hop result. The same
+  blind spot hit `decodePathDiscoveryResponse`'s `out_path_len` and `in_path_len`.
+
+  Both helpers now special-case the sentinel, so every caller sees zero hops and
+  an empty path. `AdvertPath` deliberately keeps its shape rather than gaining a
+  flood flag — an empty path is already how the rest of the library surfaces a
+  `0xFF` path length (`decodeContact`, the session contact rows).
+
+- **Zero-filled trailing entries surfaced as real frequency ranges.**
+  `decodeAllowedRepeatFreq` walked the whole `RESP_ALLOWED_REPEAT_FREQ` frame in
+  8-byte steps and emitted every pair it found, so a zero-padded frame produced
+  spurious `{ lowerKhz: 0, upperKhz: 0 }` ranges. It now stops at a pair with
+  either bound zero, matching meshcore_py's end-of-list sentinel. The
+  companion_radio firmware writes exactly one pair per configured range and sizes
+  the frame to match, so this is defensive rather than a fix for observed output;
+  the existing tolerance for a trailing partial (<8 byte) chunk is unchanged.
+
 ### Changed
 
 - **`MeshCoreSession.setOtherParams` takes an optional third argument,
@@ -198,6 +239,16 @@ for a reconnect._
   source of truth; a consumer with an auto-add settings panel should drive the
   byte and derive its `mode` display from it, not the reverse.
 
+
+- **`AclEntry.role: AclRole`** (`'guest' | 'readOnly' | 'readWrite' | 'admin'`) —
+  the authoritative reading of the permissions byte's low 2 bits, alongside the
+  raw `permissions` byte that is still exposed. `isAdmin` and `isGuest` remain,
+  now as exact role checks rather than flag tests.
+
+- **`decodeAclRole(permissions: number): AclRole`** is exported for callers
+  holding a raw permissions byte from somewhere other than an ACL list entry —
+  `LoginSuccess.aclPermissions`, for instance.
+
 ### For consumers
 
 - **`heardLive`-style checks on `source === 'advert'` keep working and become
@@ -212,6 +263,14 @@ for a reconnect._
   breaks external code that builds one as an object literal. Spread an existing
   config, or add `manualAddContacts` to the literal. Code that only reads
   `AutoAddConfig` is unaffected.
+- **The ACL role fix changes what `isAdmin` means.** `AclEntry.isAdmin` was
+  `(permissions & 0x01) !== 0` and is now `role === 'admin'`. Code gating admin
+  UI or destructive repeater actions on it was previously wrong for every role —
+  it needs no source change, but it will start behaving differently, and that is
+  the point.
+- **A second type-level caveat:** `AclEntry` gains a *required* `role` member,
+  which breaks external code that builds one as an object literal (test fixtures,
+  mostly). Code that only reads `AclEntry` is unaffected.
 - `ingestContact` and `scheduleContactRefresh` changed signatures but are
   internal — neither is re-exported from `src/index.ts` or `src/features.ts`.
 
