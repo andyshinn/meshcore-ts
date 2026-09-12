@@ -26,17 +26,31 @@ const PATH_DISCOVERY_TIMEOUT_MS = 30_000;
 // The mesh path_len byte packs the hop count (low 6 bits) and the bytes-per-hop
 // hash size (top 2 bits + 1), so the on-wire path occupies hops × hashSize bytes
 // (firmware: Packet::writePath / isValidPathLen).
+//
+// 0xFF is the one value that is NOT a compound length: it is the flood /
+// no-path sentinel (firmware OUT_PATH_UNKNOWN, meshcore_py's path_len -1) and
+// no path bytes follow it. Unpacking it would claim 63 hops × 4 bytes = 252
+// path bytes and make the decoders below reject the whole frame, so both
+// helpers special-case it to zero — matching how decodeContact and the session
+// contact rows already collapse a 0xFF out_path_len to an empty path.
+const PATH_LEN_FLOOD = 0xff;
 function pathHops(pathLenByte: number): number {
-  return pathLenByte & 0x3f;
+  return pathLenByte === PATH_LEN_FLOOD ? 0 : pathLenByte & 0x3f;
 }
 function pathByteLen(pathLenByte: number): number {
+  if (pathLenByte === PATH_LEN_FLOOD) return 0;
   const hashSize = (pathLenByte >> 6) + 1;
   return pathHops(pathLenByte) * hashSize;
 }
 
 // ---- Wire types --------------------------------------------------------
 
-/** The device's cached advert path for a contact. */
+/** The device's cached advert path for a contact.
+ *
+ *  A flood / no-path result (path_len 0xFF) is reported as `hops: 0` with an
+ *  empty `pathHex` rather than via an extra `flood` flag: it keeps this
+ *  interface unchanged for existing consumers, and "no path to walk" is already
+ *  how the rest of the library surfaces a 0xFF path length. */
 export interface AdvertPath {
   recvTimestampUnix: number;
   hops: number;
@@ -76,6 +90,8 @@ export function encodeGetAdvertPath(destPublicKeyHex: string): Buffer {
 // ---- Decoders ----------------------------------------------------------
 
 // RESP_ADVERT_PATH: [0x16][recv_timestamp u32 LE][path_len u8][path bytes].
+// path_len 0xFF (flood / no path) carries no path bytes, so the frame is a
+// valid 6-byte response and decodes to zero hops with an empty path.
 export function decodeAdvertPath(frame: Buffer): AdvertPath | null {
   if (frame.length < 6) return null;
   const pathLenByte = frame[5];
@@ -90,6 +106,8 @@ export function decodeAdvertPath(frame: Buffer): AdvertPath | null {
 
 // PUSH_PATH_DISCOVERY_RESPONSE:
 //   [0x8d][reserved u8][6B prefix][out_path_len u8][out_path][in_path_len u8][in_path]
+// Either length byte can be the 0xFF flood sentinel (that leg has no path), in
+// which case no bytes follow it and the leg decodes to zero hops / empty path.
 export function decodePathDiscoveryResponse(frame: Buffer): DiscoveredPath | null {
   if (frame.length < 9) return null; // code + reserved + 6B prefix + out_path_len
   const pubKeyPrefixHex = frame.subarray(2, 8).toString('hex');
