@@ -150,7 +150,8 @@ survives a reconnect._
   transport a silent no-op — but it also meant a later transport
   `'disconnected'` no longer matched the `wasConnected` edge, so the disconnect
   branch never ran at all. `session.stop()` followed by `port.close()` is the
-  shipped teardown order in eleven of the examples, so this is the common path.
+  shipped teardown order in nine of the examples (the two BLE examples do the
+  same with `peripheral.disconnectAsync()`), so this is the common path.
   Measured: `stop()` then an idle state change left `getSyncProgress().phase`
   latched at `'syncing'` forever, and a typed awaiter rode the full 5 s
   `REQUEST_TIMEOUT_MS` instead of rejecting; v0.8.0 gave `idle` and an immediate
@@ -159,11 +160,12 @@ survives a reconnect._
   The disconnect branch is now extracted verbatim into
   `tearDownConnection(reason)` and called from `stop()` while the latch is still
   set, before clearing it — a pure extraction, same work in the same order, with
-  the provenance comments moved alongside the code. A stopped session cannot
-  route the replies those awaiters are blocked on, so leaving them queued only
-  makes callers wait out a timeout for an answer that can no longer arrive. All
-  nine `transportState` tests still pass unchanged; none of them had encoded the
-  buggy behaviour.
+  the provenance comments moved alongside the code. The teardown is what clears
+  those awaiters, so nothing is left for a late reply to be matched against, and
+  `stop()` is immediately followed by closing the transport in every shipped
+  example; leaving them queued only makes callers wait out a timeout for an answer that can no longer arrive. All
+  fifteen `transportState` tests still pass unchanged; none of them had encoded
+  the buggy behaviour.
 
 - **A half-received serial frame survived a reconnect and swallowed the frames
   behind it.** `SerialDeframer.reset()` existed but had zero callers in `src/` —
@@ -188,10 +190,34 @@ survives a reconnect._
   a legitimate in-flight partial frame — and an error that really does end the
   stream emits `'close'` as well, which now resets. This one is **pre-existing
   rather than a 0.8.1 regression**: the new tests fail against v0.8.0's
-  `serialTransport.ts` too, which differs from the current file only by a
+  `serialTransport.ts` too, which differs from the pre-fix 0.8.1 file only by a
   comment. `TcpTransport` is unaffected and untouched — `connect()` rejects when
   a socket already exists and `close()` never clears it, so the instance is
   single-use and its deframer cannot outlive its socket.
+
+- **`parseCompanionFrame` could not name RESP code `0x1a`.** `frame.ts` kept its
+  own hand-written `PUSH_NAMES` / `RESP_NAMES` mirrors of the code tables in
+  `codes.ts`, and the copy had drifted: `RESP_ALLOWED_REPEAT_FREQ` (26) was
+  missing, so a frame carrying it came back with the
+  `codeName: 'frame 0x1a'` fallback. Consumers render that string — a packet
+  inspector or a trace log prints it verbatim — so the gap was visible, not
+  internal.
+
+  Both tables are now derived from `codes.ts` by inverting it, so a new
+  `PUSH_*` / `RESP_*` constant is named automatically and the two cannot drift
+  again. `codeName` for `0x1a` changes from `'frame 0x1a'` to
+  `'RESP_ALLOWED_REPEAT_FREQ'`; every other code keeps the name it had in
+  v0.8.0 (a full 256-code sweep of `parseCompanionFrame` finds that one
+  difference and no other). If you have a fixture, a filter or a log assertion
+  keyed on the `'frame 0x1a'` fallback, that is the one string to update.
+
+### Added
+
+- **`Protocol.PUSH.LOG_RX_DATA` (`0x88`).** The one push code the `PUSH` table
+  was missing, added while `frame.ts` moved off its private `const
+  PUSH_LOG_RX_DATA = 0x88` copy onto the shared table. Purely additive — if you
+  were hand-rolling the constant to recognise raw on-air frames, you can now
+  import it.
 
 ### For consumers
 
@@ -202,6 +228,19 @@ survives a reconnect._
   hold the gate closed before the radio had reported byte 47, set bit 0 of
   `manualAddContacts` instead — that is the value the gate reads, and the one
   the radio will confirm or correct on the next `RESP_SELF_INFO`.
+
+- **`transportState` now actually fires, so a handler you already wrote goes
+  live.** Through v0.8.0 the event was declared, typed and documented but
+  emitted from nowhere, so any subscription to it was dead code — and upgrading
+  activates it with no edit on your side. That makes it the one change here you
+  should look at before taking the bump: check that your handler is idempotent
+  (nothing de-duplicates the channel, and a transport that reports the same
+  state twice means it twice), and that it is not competing with your own
+  transport-state plumbing for the same downstream state. The payload is a bare
+  `TransportState` and carries no device identity, so a handler that
+  re-broadcasts it onto an app-level bus expecting one can blank whatever the
+  app had recorded — that is exactly what it did to the first consumer to take
+  0.8.1, whose re-broadcast had been inert since it was written.
 
 - **The two session-lifecycle fixes and the serial-deframer fix ask nothing of
   you.** No public type, field, event payload or call signature changed in any

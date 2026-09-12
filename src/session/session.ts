@@ -617,10 +617,14 @@ export class MeshCoreSession {
   /** Unwind everything the connect branch stood up: the liveness poll, the
    *  drain round, the RX correlation buffers, presence, sync progress and every
    *  in-flight awaiter. Called on a transport 'disconnected' edge and from
-   *  stop() — a stopped session is just as unable to receive the replies those
-   *  awaiters are blocked on, so leaving them queued only means callers wait out
-   *  a timeout for an answer that can no longer arrive. `reason` is the message
-   *  in-flight awaiters reject with. */
+   *  stop() — clearing the queues here is what makes a late reply unmatchable,
+   *  and stop() is immediately followed by closing the transport in every
+   *  shipped example, so leaving them queued only means callers wait out a
+   *  timeout for an answer that is not coming. NOT because a stopped session
+   *  stops listening: stop() does not unhook transport.onData and ingest() has
+   *  no `started` guard, so a stopped session on a still-open transport keeps
+   *  parsing frames and emitting events. `reason` is the message in-flight
+   *  awaiters reject with. */
   private tearDownConnection(reason: string): void {
     this.log.info(reason);
     this.stopLivenessPoll();
