@@ -11,7 +11,9 @@ carry behaviour changes.
 
 _Two things 0.8.0 made reachable — an empty path that could not say why it was
 empty, and an auto-add gate that was never really consulted — plus the
-`transportState` event finally leaving the session._
+`transportState` event finally leaving the session, the two regressions that
+emitting it introduced on the way, and a stale serial frame that no longer
+survives a reconnect._
 
 ### Fixed
 
@@ -103,6 +105,94 @@ empty, and an auto-add gate that was never really consulted — plus the
   de-duplication of the event bus, so genuinely repeated states from a transport
   still reach consumers.
 
+  **That deferral had two consequences of its own, fixed before release in the
+  next two entries.** The defer itself is right — it is what makes the event
+  reachable at all, and it stands. What it exposed is that `connected` was
+  carrying two meanings at once: as well as marking the connect edge it was the
+  gate on eleven of the session's commands, so deferring it deferred those too;
+  and clearing it in `stop()` (which the same change introduced, correctly, so
+  that `stop()` then `start()` is not a silent no-op) left the disconnect
+  teardown with no edge to match. What the entries below change is not the defer
+  but the double duty: `connected` no longer answers "can I write to the
+  radio".
+
+- **`start()` followed immediately by an awaited command wrote nothing.** The
+  first of two regressions from the entry above, both in `session.ts` and both
+  on the shipped BLE and serial paths. v0.8.0's `start()` set `connected = true`
+  synchronously on an already-connected transport; the deferred drive replaced
+  that with a `queueMicrotask`. But eleven public commands gated on that same
+  field, so it doubled as a "can I write to the radio" flag, and deferring it
+  left all eleven returning early for one microtask after `start()`. `start()`
+  is synchronous and non-awaitable, so `session.start()` followed by
+  `await session.setAdvertName(name)` is the natural call shape — and it wrote
+  nothing and returned `false`.
+
+  BLE is always the already-connected case: `createBleTransport` initialises its
+  state to `'connected'` and its `watchState` hook is optional, so a consumer
+  that omits it gets no announcement at all and `start()`'s microtask is the
+  only thing that ever moves the latch. Measured on a BLE-shaped transport: the
+  same tick wrote opcodes `[0x16]` and returned `false`; one microtask later it
+  wrote `[0x16, 0x08]` and returned `true`.
+
+  The two meanings are now split apart rather than the defer undone. `connected`
+  stays exactly the edge latch it became — its one job is keeping
+  `onTransportState`'s connect and disconnect branches to a single run per
+  connect — and the eleven commands moved to `isCommandable()`,
+  `started && transport.getState() === 'connected'`, which asks the transport
+  directly the way v0.8.0's synchronous assignment did. The liveness poll's
+  guard deliberately stays on `connected`: that timer is armed by the connect
+  branch and cleared by the disconnect branch, so it belongs to the edge, not to
+  the command surface.
+
+- **`session.stop()` stopped tearing the connection down.** The second
+  regression from the same change. Clearing `connected` in `stop()` is right for
+  restart — latching it true made `stop()` then `start()` on a still-connected
+  transport a silent no-op — but it also meant a later transport
+  `'disconnected'` no longer matched the `wasConnected` edge, so the disconnect
+  branch never ran at all. `session.stop()` followed by `port.close()` is the
+  shipped teardown order in eleven of the examples, so this is the common path.
+  Measured: `stop()` then an idle state change left `getSyncProgress().phase`
+  latched at `'syncing'` forever, and a typed awaiter rode the full 5 s
+  `REQUEST_TIMEOUT_MS` instead of rejecting; v0.8.0 gave `idle` and an immediate
+  rejection.
+
+  The disconnect branch is now extracted verbatim into
+  `tearDownConnection(reason)` and called from `stop()` while the latch is still
+  set, before clearing it — a pure extraction, same work in the same order, with
+  the provenance comments moved alongside the code. A stopped session cannot
+  route the replies those awaiters are blocked on, so leaving them queued only
+  makes callers wait out a timeout for an answer that can no longer arrive. All
+  nine `transportState` tests still pass unchanged; none of them had encoded the
+  buggy behaviour.
+
+- **A half-received serial frame survived a reconnect and swallowed the frames
+  behind it.** `SerialDeframer.reset()` existed but had zero callers in `src/` —
+  only its own unit test called it. `SerialTransport` observes a `SerialPort`
+  the consumer owns, and its `'close'` handler only set the state to `'idle'`,
+  so a partial frame sitting in the deframer buffer at close time survived into
+  the next open of that same port object.
+
+  That is not self-correcting. `push()` drops a byte only when the HEADER is
+  invalid, and a buffered partial frame has a valid header, so it is never
+  resynced away: it splices the reconnect's first bytes into itself, fabricating
+  one bogus frame and swallowing the real ones behind it. Observed at session
+  level — feed a 5-byte partial (`3e 10 00 aa bb`), close, reopen, then deliver
+  `RESP_SELF_INFO`: the deframer emitted a single bogus 16-byte frame (the stale
+  tail, then the reconnect's real header, then the first 11 bytes of the real
+  payload) and zero real frames, leaving `session.state.getOwner()` `null` where
+  the same run without the partial yields the real owner key.
+
+  `'close'` now resets the deframer. The `'error'` handler is deliberately left
+  alone: a serialport `'error'` does not imply the byte stream ended (a failed
+  write leaves the port open and data flowing), so resetting there would discard
+  a legitimate in-flight partial frame — and an error that really does end the
+  stream emits `'close'` as well, which now resets. This one is **pre-existing
+  rather than a 0.8.1 regression**: the new tests fail against v0.8.0's
+  `serialTransport.ts` too, which differs from the current file only by a
+  comment. `TcpTransport` is unaffected and untouched — `connect()` rejects when
+  a socket already exists and `close()` never clears it, so the instance is
+  single-use and its deframer cannot outlive its socket.
+
 ### For consumers
 
 - **`AutoAddConfig.mode` no longer influences the post-advert re-sync.** The
@@ -112,6 +202,23 @@ empty, and an auto-add gate that was never really consulted — plus the
   hold the gate closed before the radio had reported byte 47, set bit 0 of
   `manualAddContacts` instead — that is the value the gate reads, and the one
   the radio will confirm or correct on the next `RESP_SELF_INFO`.
+
+- **The two session-lifecycle fixes and the serial-deframer fix ask nothing of
+  you.** No public type, field, event payload or call signature changed in any
+  of the three, and the members the lifecycle fix adds — `started`,
+  `isCommandable()`, `tearDownConnection()` — are all private. Upgrading is the
+  entire action.
+
+  Worth naming anyway, because one of them restores a call shape.
+  `session.start()` followed immediately by an awaited command — say
+  `await session.setAdvertName(name)` — writes the frame in 0.8.1 exactly as it
+  did in 0.8.0. It stopped writing only on unreleased `main`, in between — the
+  `transportState` work that broke it and the fix that restored it both land
+  here — so **no published version has that regression**, and there is no
+  version to avoid. If you are tracking `main` and added a timer, a
+  `queueMicrotask`, or a wait on the `transportState` event to work around it,
+  that workaround is no longer needed; it also stays correct, so there is no
+  hurry to unpick it.
 
 ## 0.8.0
 
