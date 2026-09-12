@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { type Advert, parseAdvert } from './advert';
+import { invertCodes } from './codeNames';
 import { type MeshPacketHeader, PAYLOAD_TYPE, parseMeshPacket } from './meshPacket';
 
 /** A structurally-decoded MeshCore on-air packet. `header` is null when the
@@ -59,9 +60,7 @@ const _payloadKindsCovered: _PayloadKindsCovered = true;
 void _payloadKindsCovered;
 
 // Reverse lookup: payloadType number → enum key name, for display.
-const PAYLOAD_TYPE_NAMES: Record<number, string> = Object.fromEntries(
-  Object.entries(PAYLOAD_TYPE).map(([name, value]) => [value, name]),
-);
+const PAYLOAD_TYPE_NAMES: Record<number, string> = invertCodes(PAYLOAD_TYPE);
 
 /** Decode a full on-air mesh packet (header + path + payload) into a tagged
  *  union. Total — never throws; unparseable or unsupported input yields the
