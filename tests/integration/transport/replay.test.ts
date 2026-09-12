@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { frameBuf, frameHex } from '../../support/frames.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
@@ -11,12 +11,8 @@ import { deliver, makeSession } from '../../support/harness.js';
 // session.state / session.events — i.e. that a recorded connect session, replayed
 // frame-by-frame, drives the same observable end state as a live one.
 describe('fixture-frame replay drives session state', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('replays the captured connect-session frames and folds them into state + events', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const owners: ({ name?: string; publicKeyHex?: string } | null)[] = [];
     const deviceInfos: { firmwareVerCode?: number }[] = [];
@@ -47,7 +43,6 @@ describe('fixture-frame replay drives session state', () => {
 
   it('replaying the same frames is a no-op past the first pass (idempotent end state)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const names = ['deviceInfo', 'selfInfo'] as const;
     for (const name of names) deliver(transport, frameBuf(name));

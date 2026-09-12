@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LoopbackTransport } from '../../src/ports/transport';
-import { MeshCoreSession } from '../../src/session/session';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { LoopbackTransport } from '../../src/ports/transport';
+import type { MeshCoreSession } from '../../src/session/session';
+import { makeSession } from '../support/harness';
 
 // Build a minimal RESP_SELF_INFO companion frame:
 //   [0x05][adv_type][tx_power][max_tx_power][public_key 32B][name…]
@@ -28,13 +29,8 @@ describe('MeshCoreSession core', () => {
   let session: MeshCoreSession;
 
   beforeEach(() => {
-    transport = new LoopbackTransport();
-    session = new MeshCoreSession({ transport });
-    session.start();
-  });
-
-  afterEach(() => {
-    session.stop();
+    // makeSession registers its own onTestFinished teardown.
+    ({ session, transport } = makeSession());
   });
 
   it('runs the handshake DEVICE_QUERY → APP_START → GET_CONTACTS on connect', async () => {

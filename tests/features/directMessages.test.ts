@@ -1,10 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { createChannelsRuntime } from '../../src/features/channels';
-import { createContactsIterRuntime } from '../../src/features/contacts';
-import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
 import {
-  createDmRuntime,
   decodeContactMsgV1,
   decodeContactMsgV3,
   decodeSendConfirmed,
@@ -18,17 +14,8 @@ import {
   sendDmText,
   setAdminHooks,
 } from '../../src/features/directMessages';
-import { createDrainRuntime } from '../../src/features/drain';
-import type { FeatureContext } from '../../src/features/feature';
-import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
-import { PendingChannelSends } from '../../src/features/pendingChannelSends';
-import { createAdminCorrRuntime } from '../../src/features/repeaterAdmin';
-import { MeshObservations } from '../../src/model/meshObservations';
-import { SessionState } from '../../src/model/state/model';
-import type { Contact } from '../../src/model/types';
-import { MeshCoreEvents } from '../../src/ports/events';
-import { noopLogger } from '../../src/ports/logger';
 import { TXT_TYPE } from '../../src/protocol/codes';
+import { addContact, type FeatureCtxHarness, makeFeatureCtx, PK } from '../support/featureCtx';
 
 // ---- Pure codec tests (ported verbatim from the donor) -----------------
 
@@ -141,64 +128,17 @@ describe('directMessages: decodeSentAck / decodeSendConfirmed', () => {
 
 // ---- Real-ctx harness for the send/ack FIFO + handle path --------------
 
-// A full per-session ctx: real MeshCoreEvents + SessionState + rt (with the
-// DM runtime under test plus the sibling rt factories), capturing writes.
-function makeCtx(): {
-  ctx: FeatureContext;
-  state: SessionState;
-  events: MeshCoreEvents;
-  writes: Buffer[];
+// The shared feature ctx plus the two event logs these tests assert on.
+function makeCtx(): FeatureCtxHarness & {
   messageStates: Array<{ id: string; state: string }>;
   cliStates: Array<{ id: string; contactKey: string; state: string }>;
 } {
-  const state = new SessionState();
-  const events = new MeshCoreEvents();
-  const writes: Buffer[] = [];
+  const harness = makeFeatureCtx();
   const messageStates: Array<{ id: string; state: string }> = [];
   const cliStates: Array<{ id: string; contactKey: string; state: string }> = [];
-  events.on('messageState', (id, st) => messageStates.push({ id, state: st }));
-  events.on('cliSendState', (e) => cliStates.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
-  const ctx: FeatureContext = {
-    writeFrame: async (frame: Buffer) => {
-      writes.push(frame);
-    },
-    request: async () => {
-      throw new Error('request not used in these tests');
-    },
-    requestOrNull: async () => null,
-    events,
-    state,
-    log: noopLogger,
-    admin: {} as FeatureContext['admin'],
-    rt: {
-      meshObs: new MeshObservations(),
-      pendingChannelSends: new PendingChannelSends(),
-      deviceAdmin: createDeviceAdminRuntime(),
-      drain: createDrainRuntime(),
-      channels: createChannelsRuntime(),
-      contactsIter: createContactsIterRuntime(),
-      pathDisc: createPathDiagRuntime(),
-      dm: createDmRuntime(),
-      adminCorr: createAdminCorrRuntime(),
-    },
-    getTransportState: () => 'connected',
-    contactsSync: () => {},
-  };
-  return { ctx, state, events, writes, messageStates, cliStates };
-}
-
-const PK = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899';
-
-function addContact(state: SessionState, overrides: Partial<Contact> = {}): Contact {
-  const contact: Contact = {
-    key: `c:${PK}`,
-    publicKeyHex: PK,
-    name: 'Bob',
-    kind: 'chat',
-    ...overrides,
-  };
-  state.upsertContact(contact);
-  return contact;
+  harness.events.on('messageState', (id, st) => messageStates.push({ id, state: st }));
+  harness.events.on('cliSendState', (e) => cliStates.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
+  return { ...harness, messageStates, cliStates };
 }
 
 // RESP_SENT frame helper.

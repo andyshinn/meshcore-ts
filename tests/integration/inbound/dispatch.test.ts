@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deliver, makeSession } from '../../support/harness';
 
 // The ingest path is a router: (1) solicited typed replies, (2) the feature
@@ -7,12 +7,8 @@ import { deliver, makeSession } from '../../support/harness';
 // none of those is a deliberate no-op — these tests pin that contract so a
 // future "default: throw" can't silently break unknown frames.
 describe('inbound dispatch contract', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('ignores an unclaimed code without throwing and keeps dispatching after', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     // 0x7e is owned by no feature and is not RESP_OK/RESP_ERR.
     expect(() => deliver(transport, Buffer.from([0x7e, 0x01, 0x02]))).not.toThrow();
@@ -36,8 +32,7 @@ describe('inbound dispatch contract', () => {
   });
 
   it('ignores an inbound frame with no code (empty buffer)', () => {
-    const { session, transport } = makeSession();
-    stop = () => session.stop();
+    const { transport } = makeSession();
     // PORT NOTE: the donor delivered a synthetic companion RawPacket with
     // code:undefined. In this library the ingest path parses the code from the
     // raw frame bytes, so the equivalent "no code" frame is an empty buffer.

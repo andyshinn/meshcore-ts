@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Models } from '../../../src/index.js';
 import { frameBuf } from '../../support/frames';
 import { deliver, makeSession } from '../../support/harness';
@@ -13,12 +13,8 @@ function selfInfoWithManualAdd(manualAddContacts: number): Buffer {
 }
 
 describe('RESP_SELF_INFO handled via the feature registry', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('surfaces the radio identity as the app Owner and emits owner', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const owners: { name?: string; publicKeyHex?: string; publicKeyShort?: string }[] = [];
     const onOwner = (o: { name?: string; publicKeyHex?: string; publicKeyShort?: string } | null) => {
@@ -37,7 +33,6 @@ describe('RESP_SELF_INFO handled via the feature registry', () => {
 
   it('adopts the radio manual-add pref from byte 47 without clobbering the auto-add flags', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     // Prime the kind flags from the radio first, so the byte-47 fold is visibly a
     // merge into AutoAddConfig rather than a wholesale replace.
@@ -62,7 +57,6 @@ describe('RESP_SELF_INFO handled via the feature registry', () => {
 
   it('emits autoAddConfig only when byte 47 differs from the value already held', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const seen: Models.AutoAddConfig[] = [];
     const onCfg = (c: Models.AutoAddConfig) => seen.push(c);

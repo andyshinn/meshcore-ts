@@ -1,14 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { frameBuf } from '../../support/frames';
 import { deliver, makeSession } from '../../support/harness';
 
 describe('RESP_DEVICE_INFO handled via the feature registry', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('folds firmware info into device state and emits deviceInfo + deviceCapabilities', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const info: { firmwareVerCode?: number }[] = [];
     const caps: { repeatMode?: boolean; identityKeyIO?: boolean }[] = [];

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Ports } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
@@ -10,9 +10,6 @@ import { deliver, makeSession } from '../../support/harness';
 // adapters may bridge onto their own error/toast channel. This test asserts both
 // the warn and the event, plus that contacts state is left untouched.
 describe('PUSH_CONTACTS_FULL handled via the feature registry', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('logs a warning and emits contactsFull when the radio reports its store full', async () => {
     const warnings: string[] = [];
     const logger: Ports.Logger = {
@@ -25,7 +22,6 @@ describe('PUSH_CONTACTS_FULL handled via the feature registry', () => {
       error() {},
     };
     const { session, transport } = makeSession({ logger });
-    stop = () => session.stop();
 
     let contactsFull = 0;
     session.events.on('contactsFull', () => {

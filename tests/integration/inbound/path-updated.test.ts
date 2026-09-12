@@ -19,12 +19,8 @@ const contact = (pk: string, lastSeenMs: number): Models.Contact => ({
 });
 
 describe('inbound PUSH_PATH_UPDATED', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('touches a known contact last-seen and re-emits contacts', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 1_000));
 
     const emitted: unknown[] = [];
@@ -42,7 +38,6 @@ describe('inbound PUSH_PATH_UPDATED', () => {
 
   it('ignores PUSH_PATH_UPDATED for an unknown contact', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const emitted: unknown[] = [];
     const onContacts = (c: unknown) => emitted.push(c);
     session.events.on('contacts', onContacts);
@@ -74,55 +69,47 @@ describe('PUSH_PATH_UPDATED contact refresh', () => {
   it('ingests the refreshed record as sync, never advert — a path update is not an advert', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      session.state.upsertContact(contact(PK, 1_000));
+    session.state.upsertContact(contact(PK, 1_000));
 
-      const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
-      session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
-        observed.push({ record, source }),
-      );
+    const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
+    session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
+      observed.push({ record, source }),
+    );
 
-      deliver(transport, pathUpdated(PK));
-      const sentBefore = transport.sent.length;
-      await vi.advanceTimersByTimeAsync(100); // past the 50ms debounce
+    deliver(transport, pathUpdated(PK));
+    const sentBefore = transport.sent.length;
+    await vi.advanceTimersByTimeAsync(100); // past the 50ms debounce
 
-      // The refresh went out as CMD_GET_CONTACT_BY_KEY for this pubkey.
-      const refreshFrames = transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e);
-      expect(refreshFrames).toHaveLength(1);
-      expect(Buffer.from(refreshFrames[0]).subarray(1, 33).toString('hex')).toBe(PK);
+    // The refresh went out as CMD_GET_CONTACT_BY_KEY for this pubkey.
+    const refreshFrames = transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e);
+    expect(refreshFrames).toHaveLength(1);
+    expect(Buffer.from(refreshFrames[0]).subarray(1, 33).toString('hex')).toBe(PK);
 
-      deliver(transport, contactRecordFrame(PK, 'Repeater-Updated'));
-      await vi.runAllTimersAsync();
+    deliver(transport, contactRecordFrame(PK, 'Repeater-Updated'));
+    await vi.runAllTimersAsync();
 
-      expect(observed).toHaveLength(1);
-      expect(observed[0].source).toBe('sync');
-      expect(observed[0].record.publicKeyHex).toBe(PK);
+    expect(observed).toHaveLength(1);
+    expect(observed[0].source).toBe('sync');
+    expect(observed[0].record.publicKeyHex).toBe(PK);
 
-      // The record still landed on-radio (the radio answered for it), and the
-      // refreshed fields are visible in the contact list.
-      const updated = session.state.getContacts().find((c) => c.key === `c:${PK}`);
-      expect(updated?.name).toBe('Repeater-Updated');
-      expect(session.state.discovered.get(PK)?.on_radio).toBe(1);
-      // ...but nothing claims we heard it live: last_heard_ms only moves on an advert.
-      expect(session.state.discovered.get(PK)?.last_heard_ms).toBe(0);
-    } finally {
-      session.stop();
-    }
+    // The record still landed on-radio (the radio answered for it), and the
+    // refreshed fields are visible in the contact list.
+    const updated = session.state.getContacts().find((c) => c.key === `c:${PK}`);
+    expect(updated?.name).toBe('Repeater-Updated');
+    expect(session.state.discovered.get(PK)?.on_radio).toBe(1);
+    // ...but nothing claims we heard it live: last_heard_ms only moves on an advert.
+    expect(session.state.discovered.get(PK)?.last_heard_ms).toBe(0);
   });
 
   it('schedules no refresh for a pubkey we do not already hold', async () => {
     vi.useFakeTimers();
-    const { session, transport } = makeSession();
-    try {
-      const sentBefore = transport.sent.length;
-      deliver(transport, pathUpdated('dd'.repeat(32)));
-      await vi.advanceTimersByTimeAsync(100);
+    const { transport } = makeSession();
+    const sentBefore = transport.sent.length;
+    deliver(transport, pathUpdated('dd'.repeat(32)));
+    await vi.advanceTimersByTimeAsync(100);
 
-      // Unlike PUSH_ADVERT, a path update stays gated on a known contact — the
-      // radio only recomputes paths for contacts it already stores.
-      expect(transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e)).toHaveLength(0);
-    } finally {
-      session.stop();
-    }
+    // Unlike PUSH_ADVERT, a path update stays gated on a known contact — the
+    // radio only recomputes paths for contacts it already stores.
+    expect(transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e)).toHaveLength(0);
   });
 });
