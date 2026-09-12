@@ -17,9 +17,6 @@ import { PUSH, RESP } from './codes';
 const PUSH_NAMES: Record<number, string> = invertCodes(PUSH, 'PUSH_');
 const RESP_NAMES: Record<number, string> = invertCodes(RESP, 'RESP_');
 
-const PUSH_RAW_DATA = 0x84;
-const PUSH_LOG_RX_DATA = 0x88;
-
 /** Which push delivered a mesh packet. Only `'log_rx'` (0x88) is safe to feed
  *  into the mesh-packet parser — 0x84 (`'raw'`) writes a 0xFF reserved byte
  *  where path_len would be, so its bytes don't follow the Packet wire format. */
@@ -47,7 +44,7 @@ export function parseCompanionFrame(frame: Buffer): ParsedFrame | null {
   if (frame.length < 1) return null;
   const code = frame[0];
 
-  if (code === PUSH_RAW_DATA && frame.length >= 4) {
+  if (code === PUSH.RAW_DATA && frame.length >= 4) {
     // [0x84][snr*4 i8][rssi i8][0xFF reserved][mesh…]
     const snr = frame.readInt8(1) / 4;
     const rssi = frame.readInt8(2);
@@ -62,7 +59,7 @@ export function parseCompanionFrame(frame: Buffer): ParsedFrame | null {
     };
   }
 
-  if (code === PUSH_LOG_RX_DATA && frame.length >= 3) {
+  if (code === PUSH.LOG_RX_DATA && frame.length >= 3) {
     // [0x88][snr*4 i8][rssi i8][mesh…]
     const snr = frame.readInt8(1) / 4;
     const rssi = frame.readInt8(2);
