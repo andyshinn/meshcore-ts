@@ -11,9 +11,13 @@ import {
   encodeGetContacts,
   encodeRemoveContact,
   encodeResetPath,
+  shouldAutoAdd,
 } from '../../src/features/contacts';
 import type { Models, Transports } from '../../src/index';
 import { hashSizeFromOutPathLen, hopsFromOutPathLen } from '../../src/model/contacts';
+import { DEFAULT_AUTO_ADD_CONFIG } from '../../src/model/types';
+import { ADV_TYPE } from '../../src/protocol/codes';
+import { makeFeatureCtx } from '../support/featureCtx';
 import { deliver, makeSession } from '../support/harness';
 
 const hex = (b: Buffer) => b.toString('hex');
@@ -660,5 +664,67 @@ describe('contacts bulk sync: the window always closes', () => {
     // this must pin the exact count.
     expect(contacts).toBe(2);
     expect(session.state.getContacts()).toHaveLength(2);
+  });
+});
+
+describe('shouldAutoAdd', () => {
+  // `manualAddContacts` bit 0 is the only master switch: it is the firmware's
+  // own `_prefs.manual_add_contacts`, mirrored from RESP_SELF_INFO byte 47.
+  // `mode` is app-side state the library never assigns, so it must not gate
+  // this — left at its `'all'` default it would swallow the per-kind flags.
+  const config = (over: Partial<Models.AutoAddConfig>) => ({
+    ...DEFAULT_AUTO_ADD_CONFIG,
+    chat: false,
+    repeater: false,
+    room: false,
+    sensor: false,
+    ...over,
+  });
+
+  it('honours the per-kind flags when bit 0 is set', () => {
+    const { ctx, state } = makeFeatureCtx();
+    state.setAutoAddConfig(config({ manualAddContacts: 0x01, chat: true }));
+
+    expect(shouldAutoAdd(ctx, ADV_TYPE.CHAT)).toBe(true);
+    expect(shouldAutoAdd(ctx, ADV_TYPE.REPEATER)).toBe(false);
+    expect(shouldAutoAdd(ctx, ADV_TYPE.ROOM)).toBe(false);
+    expect(shouldAutoAdd(ctx, ADV_TYPE.SENSOR)).toBe(false);
+  });
+
+  it('ignores the per-kind flags when bit 0 is clear', () => {
+    const { ctx, state } = makeFeatureCtx();
+    state.setAutoAddConfig(config({ manualAddContacts: 0x00 }));
+
+    for (const t of [ADV_TYPE.CHAT, ADV_TYPE.REPEATER, ADV_TYPE.ROOM, ADV_TYPE.SENSOR]) {
+      expect(shouldAutoAdd(ctx, t)).toBe(true);
+    }
+  });
+
+  it('reads only bit 0, not the whole byte', () => {
+    const { ctx, state } = makeFeatureCtx();
+    // Higher bits of `_prefs.manual_add_contacts` are not the auto-add switch;
+    // a byte of 0xfe must still read as "auto-add everything".
+    state.setAutoAddConfig(config({ manualAddContacts: 0xfe }));
+    expect(shouldAutoAdd(ctx, ADV_TYPE.REPEATER)).toBe(true);
+
+    state.setAutoAddConfig(config({ manualAddContacts: 0xff }));
+    expect(shouldAutoAdd(ctx, ADV_TYPE.REPEATER)).toBe(false);
+  });
+
+  it('does not let the app-side `mode` override the radio byte', () => {
+    const { ctx, state } = makeFeatureCtx();
+    // `mode` sits at 'all' for any consumer that never seeds the mirror; the
+    // radio saying "I honour my per-kind flags" must still win.
+    state.setAutoAddConfig(config({ mode: 'all', manualAddContacts: 0x01 }));
+    expect(shouldAutoAdd(ctx, ADV_TYPE.REPEATER)).toBe(false);
+  });
+
+  it('defaults an unknown ADV_TYPE to the chat flag', () => {
+    const { ctx, state } = makeFeatureCtx();
+    state.setAutoAddConfig(config({ manualAddContacts: 0x01, chat: true }));
+    expect(shouldAutoAdd(ctx, 0x7f)).toBe(true);
+
+    state.setAutoAddConfig(config({ manualAddContacts: 0x01, chat: false }));
+    expect(shouldAutoAdd(ctx, 0x7f)).toBe(false);
   });
 });

@@ -337,10 +337,23 @@ export function removeContact(ctx: FeatureContext, key: string): void {
 
 /** Whether the firmware would auto-store an advert of this ADV_TYPE, given the
  *  current auto-add config. Used to decide whether to re-sync after a
- *  not-on-radio advert. */
+ *  not-on-radio advert.
+ *
+ *  The master switch is bit 0 of `manualAddContacts` — firmware
+ *  `_prefs.manual_add_contacts`, mirrored from `RESP_SELF_INFO` byte 47 — NOT
+ *  the app-side `mode`. `MyMesh::shouldAutoAddContactType` returns `true`
+ *  before ever consulting `_prefs.autoadd_config` while that bit is clear, so:
+ *
+ *    bit 0 clear -> the radio auto-adds every kind; the per-kind flags are inert.
+ *    bit 0 set   -> the radio honours the per-kind flags; so do we.
+ *
+ *  `mode` is deliberately not consulted: the library never writes it, so it
+ *  sits at its `'all'` default for any consumer that doesn't seed the mirror
+ *  and would short-circuit this to `true` for every advert type. Only
+ *  radio-mirrored state can answer a question about what the radio would do. */
 export function shouldAutoAdd(ctx: FeatureContext, advType: number): boolean {
   const cfg = ctx.state.getAutoAddConfig();
-  if (cfg.mode === 'all') return true;
+  if ((cfg.manualAddContacts & 0x01) === 0) return true;
   switch (advType) {
     case ADV_TYPE.REPEATER:
       return cfg.repeater;
@@ -548,6 +561,13 @@ export function ingestContact(
     });
   }
 
+  // A refused advert (PUSH_NEW_ADVERT) of a kind the radio auto-adds means our
+  // contact map is behind the radio's, so walk it. One residual case is not
+  // worth more logic here: the kind is enabled but the radio's contact store is
+  // FULL, so the advert was refused anyway and this walk cannot produce the
+  // contact. The radio reports that condition separately as RESP_CONTACTS_FULL
+  // (surfaced as the `contactsFull` event), which is where a consumer should
+  // handle it.
   if (source === 'advert' && !onRadio && shouldAutoAdd(ctx, record.type)) {
     scheduleContactsResync(ctx);
   }
