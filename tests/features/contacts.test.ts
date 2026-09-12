@@ -719,6 +719,24 @@ describe('shouldAutoAdd', () => {
     expect(shouldAutoAdd(ctx, ADV_TYPE.REPEATER)).toBe(false);
   });
 
+  // The other direction, and the one that is NOT self-evident: `mode` must not
+  // be consulted "only where it narrows" either. A consumer that seeds the
+  // mirror (coresense does, from its persisted config) can hold a stale
+  // `'selected'` against a radio that has since reported bit 0 CLEAR — the
+  // radio auto-adds everything, so a refused advert means our map really is
+  // behind it and the walk is legitimate. A `|| cfg.mode === 'selected'` clause
+  // would suppress it, and a suppressed legitimate re-sync is a worse failure
+  // than a redundant walk (the same trade the max-hop residual is declined on).
+  // This case fails the moment that clause is reintroduced; nothing else does.
+  it('does not let a stale `mode: selected` close the gate the radio left open', () => {
+    const { ctx, state } = makeFeatureCtx();
+    state.setAutoAddConfig(config({ mode: 'selected', manualAddContacts: 0x00 }));
+
+    for (const t of [ADV_TYPE.CHAT, ADV_TYPE.REPEATER, ADV_TYPE.ROOM, ADV_TYPE.SENSOR]) {
+      expect(shouldAutoAdd(ctx, t)).toBe(true);
+    }
+  });
+
   it('defaults an unknown ADV_TYPE to the chat flag', () => {
     const { ctx, state } = makeFeatureCtx();
     state.setAutoAddConfig(config({ manualAddContacts: 0x01, chat: true }));

@@ -7,6 +7,112 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.8.1
+
+_Two things 0.8.0 made reachable — an empty path that could not say why it was
+empty, and an auto-add gate that was never really consulted — plus the
+`transportState` event finally leaving the session._
+
+### Fixed
+
+- **A decoded path could not say whether "zero hops" meant "heard direct" or
+  "no path at all".** 0.8.0 taught both `path_len` helpers that `0xFF` is the
+  flood / no-path sentinel rather than a compound length, which is what stopped
+  a flood reply from being rejected as a short frame. But it left `path_len`
+  `0x00` and `path_len` `0xFF` decoding to the identical
+  `{ hops: 0, pathHex: '' }`, and `getAdvertPath` / `sendPathDiscoveryReq`
+  hand the caller nothing else — unlike a contact row, which keeps its raw
+  `outPathLen` byte alongside the decoded path, so its consumer can still tell
+  the two apart.
+
+  Downstream, that empty path reads as a fact: an app building an inbound-hops
+  column from `getAdvertPath` persisted "heard direct — 0 hops" for nodes it
+  held no path information about whatsoever, and the value is stored and sorted
+  on, so the wrong reading outlives the query that produced it.
+
+  `AdvertPath` now carries `flood?: true`, and `DiscoveredPath` carries
+  `outFlood?: true` / `inFlood?: true` — each leg has its own `path_len` byte,
+  so either can be the sentinel independently of the other. The flags are
+  optional and only ever `true`: every existing field keeps its type and
+  existing consumers keep compiling. Widening `hops` to `number | undefined`
+  would have said the same thing more honestly and broken every consumer doing
+  arithmetic on it; it was deliberately not taken.
+
+- **The post-advert re-sync ignored the auto-add flags it was supposed to
+  check.** `shouldAutoAdd` gated on `AutoAddConfig.mode`, which nothing in this
+  library ever assigns — so for any consumer that does not seed the mirror
+  itself, `mode` sits at its `'all'` default forever and the function
+  short-circuited to `true` for every advert type, never reading the per-kind
+  `chat` / `repeater` / `room` / `sensor` flags.
+
+  That was inert while `encodeSetOtherParams` hardcoded
+  `manual_add_contacts = 0`: the radio was forced to auto-add everything, so
+  essentially every advert arrived as an on-radio `PUSH_ADVERT` (0x80) and
+  never reached the gate. 0.8.0 let consumers set bit 0 — and then every
+  *refused* advert (`PUSH_NEW_ADVERT`, 0x8a, not on radio) reaches it, each one
+  scheduling a full `CMD_GET_CONTACTS` walk behind the 1.5s debounce. On a busy
+  mesh that is near-continuous contact enumeration for contacts the radio has
+  already declined to store.
+
+  The master switch is now bit 0 of `manualAddContacts`, a genuinely
+  radio-mirrored field (`RESP_SELF_INFO` byte 47) rather than app-side state:
+  clear means the radio auto-adds everything and its per-kind flags are inert
+  (`MyMesh::shouldAutoAddContactType` returns `true` before it ever reads
+  `_prefs.autoadd_config`), set means those flags decide.
+
+  `mode` is no longer consulted at all — not in either direction, not as a
+  fallback. Only radio-mirrored state can answer a question about what the
+  radio would do, and `mode` is not that: the library never assigns it, so it
+  reflects whatever the consumer last seeded, which can be arbitrarily stale
+  against a byte the radio may have changed since (or that another client
+  changed). Honouring it "only where it narrows" was tried and rejected: a
+  stored `'selected'` against a radio reporting bit 0 clear would then
+  *suppress* a re-sync the radio's own behaviour justifies, and a suppressed
+  legitimate walk is a worse failure than an occasional redundant one.
+
+  Two refusals deliberately survive the gate, documented at the
+  `scheduleContactsResync` call site rather than guessed at in code, because
+  `PUSH_NEW_ADVERT` is emitted by all three of `BaseChatMesh::onAdvertRecv`'s
+  early returns and only the first is answerable from the auto-add flags: the
+  advert exceeded `getAutoAddMaxHops()`, or `allocateContactSlot()` returned
+  `NULL` because the contact store is *full*. Each still schedules a walk that
+  cannot produce the contact. The hop case is declined rather than infeasible —
+  gating it would mean guessing the firmware's exact comparison — and the
+  store-full case the firmware reports separately as `PUSH_CONTACTS_FULL`
+  (0x90), which this library already surfaces as the `contactsFull` event.
+
+- **`transportState` was declared, documented, and never emitted.** The event is
+  in `MeshCoreEventMap`, exposed as `EventName.TRANSPORT_STATE` and described in
+  the README and the events guide, but nothing in the session ever emitted it:
+  `onTransportState` drove handshake, liveness and teardown internally and threw
+  the state away. Consumers could not route around it either — `Transport.onStateChange`
+  is a single-slot setter in every implementation and the session claims that
+  slot in `start()`, so 11 of the 17 files in `examples/` gated their whole body
+  on an event that never arrived.
+
+  It is now emitted at the *end* of `onTransportState`, after the
+  connect/disconnect branch, so a handler never observes half-torn-down session
+  state. `start()` routes the already-connected case through the same function
+  instead of setting `connected` and kicking the handshake inline, which is what
+  used to skip the broadcast — along with the presence clear and the liveness
+  poll that branch also owns, so a session started on a live link never polled
+  it. That drive is deferred to a microtask, both so a consumer subscribing
+  after `start()` in the same tick still hears it and so a transport that
+  announces its own open port (as `SerialTransport` does) gets there first and
+  leaves it a no-op. Exactly one `'connected'` either way, with no
+  de-duplication of the event bus, so genuinely repeated states from a transport
+  still reach consumers.
+
+### For consumers
+
+- **`AutoAddConfig.mode` no longer influences the post-advert re-sync.** The
+  field is unchanged, still public, still defaulting to `'all'`; only its
+  effect on that internal gate is gone. If you seed the mirror through
+  `session.state.setAutoAddConfig` and were relying on `mode: 'selected'` to
+  hold the gate closed before the radio had reported byte 47, set bit 0 of
+  `manualAddContacts` instead — that is the value the gate reads, and the one
+  the radio will confirm or correct on the next `RESP_SELF_INFO`.
+
 ## 0.8.0
 
 _The contact list finally goes live: a newly auto-added contact no longer waits
@@ -189,9 +295,12 @@ for a reconnect._
   blind spot hit `decodePathDiscoveryResponse`'s `out_path_len` and `in_path_len`.
 
   Both helpers now special-case the sentinel, so every caller sees zero hops and
-  an empty path. `AdvertPath` deliberately keeps its shape rather than gaining a
+  an empty path. `AdvertPath` deliberately kept its shape rather than gaining a
   flood flag — an empty path is already how the rest of the library surfaces a
-  `0xFF` path length (`decodeContact`, the session contact rows).
+  `0xFF` path length (`decodeContact`, the session contact rows). That call did
+  not hold: with no raw `path_len` to fall back on, a `getAdvertPath` caller
+  could no longer tell "heard direct" from "no path cached", so 0.8.1 adds the
+  flag after all.
 
 - **Zero-filled trailing entries surfaced as real frequency ranges.**
   `decodeAllowedRepeatFreq` walked the whole `RESP_ALLOWED_REPEAT_FREQ` frame in
