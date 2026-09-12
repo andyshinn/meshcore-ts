@@ -7,6 +7,258 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.8.1
+
+_Two things 0.8.0 made reachable — an empty path that could not say why it was
+empty, and an auto-add gate that was never really consulted — plus the
+`transportState` event finally leaving the session, the two regressions that
+emitting it introduced on the way, and a stale serial frame that no longer
+survives a reconnect._
+
+### Fixed
+
+- **A decoded path could not say whether "zero hops" meant "heard direct" or
+  "no path at all".** 0.8.0 taught both `path_len` helpers that `0xFF` is the
+  flood / no-path sentinel rather than a compound length, which is what stopped
+  a flood reply from being rejected as a short frame. But it left `path_len`
+  `0x00` and `path_len` `0xFF` decoding to the identical
+  `{ hops: 0, pathHex: '' }`, and `getAdvertPath` / `sendPathDiscoveryReq`
+  hand the caller nothing else — unlike a contact row, which keeps its raw
+  `outPathLen` byte alongside the decoded path, so its consumer can still tell
+  the two apart.
+
+  Downstream, that empty path reads as a fact: an app building an inbound-hops
+  column from `getAdvertPath` persisted "heard direct — 0 hops" for nodes it
+  held no path information about whatsoever, and the value is stored and sorted
+  on, so the wrong reading outlives the query that produced it.
+
+  `AdvertPath` now carries `flood?: true`, and `DiscoveredPath` carries
+  `outFlood?: true` / `inFlood?: true` — each leg has its own `path_len` byte,
+  so either can be the sentinel independently of the other. The flags are
+  optional and only ever `true`: every existing field keeps its type and
+  existing consumers keep compiling. Widening `hops` to `number | undefined`
+  would have said the same thing more honestly and broken every consumer doing
+  arithmetic on it; it was deliberately not taken.
+
+- **The post-advert re-sync ignored the auto-add flags it was supposed to
+  check.** `shouldAutoAdd` gated on `AutoAddConfig.mode`, which nothing in this
+  library ever assigns — so for any consumer that does not seed the mirror
+  itself, `mode` sits at its `'all'` default forever and the function
+  short-circuited to `true` for every advert type, never reading the per-kind
+  `chat` / `repeater` / `room` / `sensor` flags.
+
+  That was inert while `encodeSetOtherParams` hardcoded
+  `manual_add_contacts = 0`: the radio was forced to auto-add everything, so
+  essentially every advert arrived as an on-radio `PUSH_ADVERT` (0x80) and
+  never reached the gate. 0.8.0 let consumers set bit 0 — and then every
+  *refused* advert (`PUSH_NEW_ADVERT`, 0x8a, not on radio) reaches it, each one
+  scheduling a full `CMD_GET_CONTACTS` walk behind the 1.5s debounce. On a busy
+  mesh that is near-continuous contact enumeration for contacts the radio has
+  already declined to store.
+
+  The master switch is now bit 0 of `manualAddContacts`, a genuinely
+  radio-mirrored field (`RESP_SELF_INFO` byte 47) rather than app-side state:
+  clear means the radio auto-adds everything and its per-kind flags are inert
+  (`MyMesh::shouldAutoAddContactType` returns `true` before it ever reads
+  `_prefs.autoadd_config`), set means those flags decide.
+
+  `mode` is no longer consulted at all — not in either direction, not as a
+  fallback. Only radio-mirrored state can answer a question about what the
+  radio would do, and `mode` is not that: the library never assigns it, so it
+  reflects whatever the consumer last seeded, which can be arbitrarily stale
+  against a byte the radio may have changed since (or that another client
+  changed). Honouring it "only where it narrows" was tried and rejected: a
+  stored `'selected'` against a radio reporting bit 0 clear would then
+  *suppress* a re-sync the radio's own behaviour justifies, and a suppressed
+  legitimate walk is a worse failure than an occasional redundant one.
+
+  Two refusals deliberately survive the gate, documented at the
+  `scheduleContactsResync` call site rather than guessed at in code, because
+  `PUSH_NEW_ADVERT` is emitted by all three of `BaseChatMesh::onAdvertRecv`'s
+  early returns and only the first is answerable from the auto-add flags: the
+  advert exceeded `getAutoAddMaxHops()`, or `allocateContactSlot()` returned
+  `NULL` because the contact store is *full*. Each still schedules a walk that
+  cannot produce the contact. The hop case is declined rather than infeasible —
+  gating it would mean guessing the firmware's exact comparison — and the
+  store-full case the firmware reports separately as `PUSH_CONTACTS_FULL`
+  (0x90), which this library already surfaces as the `contactsFull` event.
+
+- **`transportState` was declared, documented, and never emitted.** The event is
+  in `MeshCoreEventMap`, exposed as `EventName.TRANSPORT_STATE` and described in
+  the README and the events guide, but nothing in the session ever emitted it:
+  `onTransportState` drove handshake, liveness and teardown internally and threw
+  the state away. Consumers could not route around it either — `Transport.onStateChange`
+  is a single-slot setter in every implementation and the session claims that
+  slot in `start()`, so 11 of the 17 files in `examples/` gated their whole body
+  on an event that never arrived.
+
+  It is now emitted at the *end* of `onTransportState`, after the
+  connect/disconnect branch, so a handler never observes half-torn-down session
+  state. `start()` routes the already-connected case through the same function
+  instead of setting `connected` and kicking the handshake inline, which is what
+  used to skip the broadcast — along with the presence clear and the liveness
+  poll that branch also owns, so a session started on a live link never polled
+  it. That drive is deferred to a microtask, both so a consumer subscribing
+  after `start()` in the same tick still hears it and so a transport that
+  announces its own open port (as `SerialTransport` does) gets there first and
+  leaves it a no-op. Exactly one `'connected'` either way, with no
+  de-duplication of the event bus, so genuinely repeated states from a transport
+  still reach consumers.
+
+  **That deferral had two consequences of its own, fixed before release in the
+  next two entries.** The defer itself is right — it is what makes the event
+  reachable at all, and it stands. What it exposed is that `connected` was
+  carrying two meanings at once: as well as marking the connect edge it was the
+  gate on eleven of the session's commands, so deferring it deferred those too;
+  and clearing it in `stop()` (which the same change introduced, correctly, so
+  that `stop()` then `start()` is not a silent no-op) left the disconnect
+  teardown with no edge to match. What the entries below change is not the defer
+  but the double duty: `connected` no longer answers "can I write to the
+  radio".
+
+- **`start()` followed immediately by an awaited command wrote nothing.** The
+  first of two regressions from the entry above, both in `session.ts` and both
+  on the shipped BLE and serial paths. v0.8.0's `start()` set `connected = true`
+  synchronously on an already-connected transport; the deferred drive replaced
+  that with a `queueMicrotask`. But eleven public commands gated on that same
+  field, so it doubled as a "can I write to the radio" flag, and deferring it
+  left all eleven returning early for one microtask after `start()`. `start()`
+  is synchronous and non-awaitable, so `session.start()` followed by
+  `await session.setAdvertName(name)` is the natural call shape — and it wrote
+  nothing and returned `false`.
+
+  BLE is always the already-connected case: `createBleTransport` initialises its
+  state to `'connected'` and its `watchState` hook is optional, so a consumer
+  that omits it gets no announcement at all and `start()`'s microtask is the
+  only thing that ever moves the latch. Measured on a BLE-shaped transport: the
+  same tick wrote opcodes `[0x16]` and returned `false`; one microtask later it
+  wrote `[0x16, 0x08]` and returned `true`.
+
+  The two meanings are now split apart rather than the defer undone. `connected`
+  stays exactly the edge latch it became — its one job is keeping
+  `onTransportState`'s connect and disconnect branches to a single run per
+  connect — and the eleven commands moved to `isCommandable()`,
+  `started && transport.getState() === 'connected'`, which asks the transport
+  directly the way v0.8.0's synchronous assignment did. The liveness poll's
+  guard deliberately stays on `connected`: that timer is armed by the connect
+  branch and cleared by the disconnect branch, so it belongs to the edge, not to
+  the command surface.
+
+- **`session.stop()` stopped tearing the connection down.** The second
+  regression from the same change. Clearing `connected` in `stop()` is right for
+  restart — latching it true made `stop()` then `start()` on a still-connected
+  transport a silent no-op — but it also meant a later transport
+  `'disconnected'` no longer matched the `wasConnected` edge, so the disconnect
+  branch never ran at all. `session.stop()` followed by `port.close()` is the
+  shipped teardown order in nine of the examples (the two BLE examples do the
+  same with `peripheral.disconnectAsync()`), so this is the common path.
+  Measured: `stop()` then an idle state change left `getSyncProgress().phase`
+  latched at `'syncing'` forever, and a typed awaiter rode the full 5 s
+  `REQUEST_TIMEOUT_MS` instead of rejecting; v0.8.0 gave `idle` and an immediate
+  rejection.
+
+  The disconnect branch is now extracted verbatim into
+  `tearDownConnection(reason)` and called from `stop()` while the latch is still
+  set, before clearing it — a pure extraction, same work in the same order, with
+  the provenance comments moved alongside the code. The teardown is what clears
+  those awaiters, so nothing is left for a late reply to be matched against, and
+  `stop()` is immediately followed by closing the transport in every shipped
+  example; leaving them queued only makes callers wait out a timeout for an answer that can no longer arrive. All
+  fifteen `transportState` tests still pass unchanged; none of them had encoded
+  the buggy behaviour.
+
+- **A half-received serial frame survived a reconnect and swallowed the frames
+  behind it.** `SerialDeframer.reset()` existed but had zero callers in `src/` —
+  only its own unit test called it. `SerialTransport` observes a `SerialPort`
+  the consumer owns, and its `'close'` handler only set the state to `'idle'`,
+  so a partial frame sitting in the deframer buffer at close time survived into
+  the next open of that same port object.
+
+  That is not self-correcting. `push()` drops a byte only when the HEADER is
+  invalid, and a buffered partial frame has a valid header, so it is never
+  resynced away: it splices the reconnect's first bytes into itself, fabricating
+  one bogus frame and swallowing the real ones behind it. Observed at session
+  level — feed a 5-byte partial (`3e 10 00 aa bb`), close, reopen, then deliver
+  `RESP_SELF_INFO`: the deframer emitted a single bogus 16-byte frame (the stale
+  tail, then the reconnect's real header, then the first 11 bytes of the real
+  payload) and zero real frames, leaving `session.state.getOwner()` `null` where
+  the same run without the partial yields the real owner key.
+
+  `'close'` now resets the deframer. The `'error'` handler is deliberately left
+  alone: a serialport `'error'` does not imply the byte stream ended (a failed
+  write leaves the port open and data flowing), so resetting there would discard
+  a legitimate in-flight partial frame — and an error that really does end the
+  stream emits `'close'` as well, which now resets. This one is **pre-existing
+  rather than a 0.8.1 regression**: the new tests fail against v0.8.0's
+  `serialTransport.ts` too, which differs from the pre-fix 0.8.1 file only by a
+  comment. `TcpTransport` is unaffected and untouched — `connect()` rejects when
+  a socket already exists and `close()` never clears it, so the instance is
+  single-use and its deframer cannot outlive its socket.
+
+- **`parseCompanionFrame` could not name RESP code `0x1a`.** `frame.ts` kept its
+  own hand-written `PUSH_NAMES` / `RESP_NAMES` mirrors of the code tables in
+  `codes.ts`, and the copy had drifted: `RESP_ALLOWED_REPEAT_FREQ` (26) was
+  missing, so a frame carrying it came back with the
+  `codeName: 'frame 0x1a'` fallback. Consumers render that string — a packet
+  inspector or a trace log prints it verbatim — so the gap was visible, not
+  internal.
+
+  Both tables are now derived from `codes.ts` by inverting it, so a new
+  `PUSH_*` / `RESP_*` constant is named automatically and the two cannot drift
+  again. `codeName` for `0x1a` changes from `'frame 0x1a'` to
+  `'RESP_ALLOWED_REPEAT_FREQ'`; every other code keeps the name it had in
+  v0.8.0 (a full 256-code sweep of `parseCompanionFrame` finds that one
+  difference and no other). If you have a fixture, a filter or a log assertion
+  keyed on the `'frame 0x1a'` fallback, that is the one string to update.
+
+### Added
+
+- **`Protocol.PUSH.LOG_RX_DATA` (`0x88`).** The one push code the `PUSH` table
+  was missing, added while `frame.ts` moved off its private `const
+  PUSH_LOG_RX_DATA = 0x88` copy onto the shared table. Purely additive — if you
+  were hand-rolling the constant to recognise raw on-air frames, you can now
+  import it.
+
+### For consumers
+
+- **`AutoAddConfig.mode` no longer influences the post-advert re-sync.** The
+  field is unchanged, still public, still defaulting to `'all'`; only its
+  effect on that internal gate is gone. If you seed the mirror through
+  `session.state.setAutoAddConfig` and were relying on `mode: 'selected'` to
+  hold the gate closed before the radio had reported byte 47, set bit 0 of
+  `manualAddContacts` instead — that is the value the gate reads, and the one
+  the radio will confirm or correct on the next `RESP_SELF_INFO`.
+
+- **`transportState` now actually fires, so a handler you already wrote goes
+  live.** Through v0.8.0 the event was declared, typed and documented but
+  emitted from nowhere, so any subscription to it was dead code — and upgrading
+  activates it with no edit on your side. That makes it the one change here you
+  should look at before taking the bump: check that your handler is idempotent
+  (nothing de-duplicates the channel, and a transport that reports the same
+  state twice means it twice), and that it is not competing with your own
+  transport-state plumbing for the same downstream state. The payload is a bare
+  `TransportState` and carries no device identity, so a handler that
+  re-broadcasts it onto an app-level bus expecting one can blank whatever the
+  app had recorded — that is exactly what it did to the first consumer to take
+  0.8.1, whose re-broadcast had been inert since it was written.
+
+- **The two session-lifecycle fixes and the serial-deframer fix ask nothing of
+  you.** No public type, field, event payload or call signature changed in any
+  of the three, and the members the lifecycle fix adds — `started`,
+  `isCommandable()`, `tearDownConnection()` — are all private. Upgrading is the
+  entire action.
+
+  Worth naming anyway, because one of them restores a call shape.
+  `session.start()` followed immediately by an awaited command — say
+  `await session.setAdvertName(name)` — writes the frame in 0.8.1 exactly as it
+  did in 0.8.0. It stopped writing only on unreleased `main`, in between — the
+  `transportState` work that broke it and the fix that restored it both land
+  here — so **no published version has that regression**, and there is no
+  version to avoid. If you are tracking `main` and added a timer, a
+  `queueMicrotask`, or a wait on the `transportState` event to work around it,
+  that workaround is no longer needed; it also stays correct, so there is no
+  hurry to unpick it.
+
 ## 0.8.0
 
 _The contact list finally goes live: a newly auto-added contact no longer waits
@@ -189,9 +441,12 @@ for a reconnect._
   blind spot hit `decodePathDiscoveryResponse`'s `out_path_len` and `in_path_len`.
 
   Both helpers now special-case the sentinel, so every caller sees zero hops and
-  an empty path. `AdvertPath` deliberately keeps its shape rather than gaining a
+  an empty path. `AdvertPath` deliberately kept its shape rather than gaining a
   flood flag — an empty path is already how the rest of the library surfaces a
-  `0xFF` path length (`decodeContact`, the session contact rows).
+  `0xFF` path length (`decodeContact`, the session contact rows). That call did
+  not hold: with no raw `path_len` to fall back on, a `getAdvertPath` caller
+  could no longer tell "heard direct" from "no path cached", so 0.8.1 adds the
+  flag after all.
 
 - **Zero-filled trailing entries surfaced as real frequency ranges.**
   `decodeAllowedRepeatFreq` walked the whole `RESP_ALLOWED_REPEAT_FREQ` frame in
