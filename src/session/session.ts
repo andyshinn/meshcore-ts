@@ -574,6 +574,14 @@ export class MeshCoreSession {
       // flush the partial list, which is what the session actually holds.
       closeContactsBulk(this.ctx);
     }
+    // Broadcast last, deliberately: the branches above do the internal
+    // bookkeeping (presence, liveness poll, drain/correlation buffers, sync
+    // progress, awaiter teardown). Emitting first would let a consumer handler
+    // observe half-torn-down session state. Neither branch returns early, and
+    // a transition that matches neither (e.g. idle → connecting, or an
+    // error while already disconnected) still falls through to here, so every
+    // state change reaches subscribers exactly once.
+    this.events.emit('transportState', state);
   };
 
   /** Snapshot of channel keys currently present on the radio. Empty when the
