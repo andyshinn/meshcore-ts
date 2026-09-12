@@ -327,162 +327,130 @@ describe('PUSH_ADVERT schedules a single-contact refresh (Fix B)', () => {
   it('sends CMD_GET_CONTACT_BY_KEY after the debounce when a known contact re-advertises', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      // Seed a known contact so the PUSH_ADVERT handler finds it.
-      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
-      session.state.upsertContact(contact);
+    // Seed a known contact so the PUSH_ADVERT handler finds it.
+    const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+    session.state.upsertContact(contact);
 
-      // Deliver PUSH_ADVERT [0x80][pubkey].
-      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
-      deliver(transport, advertFrame);
+    // Deliver PUSH_ADVERT [0x80][pubkey].
+    const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+    deliver(transport, advertFrame);
 
-      // Before the debounce fires, no refresh command should have been sent.
-      const sentBeforeDebounce = transport.sent.length;
+    // Before the debounce fires, no refresh command should have been sent.
+    const sentBeforeDebounce = transport.sent.length;
 
-      // Advance past the 50ms debounce.
-      await vi.advanceTimersByTimeAsync(100);
+    // Advance past the 50ms debounce.
+    await vi.advanceTimersByTimeAsync(100);
 
-      // CMD_GET_CONTACT_BY_KEY (0x1e) must have been sent for this pubkey.
-      const refreshFrames = transport.sent.slice(sentBeforeDebounce);
-      expect(refreshFrames.length).toBeGreaterThan(0);
-      const lastSent = refreshFrames.at(-1);
-      expect(lastSent).toBeDefined();
-      const lastFrame = Buffer.from(lastSent ?? []);
-      expect(lastFrame[0]).toBe(0x1e); // CMD_GET_CONTACT_BY_KEY
-      expect(lastFrame.subarray(1, 33).toString('hex')).toBe(pk);
-    } finally {
-      session.stop();
-    }
+    // CMD_GET_CONTACT_BY_KEY (0x1e) must have been sent for this pubkey.
+    const refreshFrames = transport.sent.slice(sentBeforeDebounce);
+    expect(refreshFrames.length).toBeGreaterThan(0);
+    const lastSent = refreshFrames.at(-1);
+    expect(lastSent).toBeDefined();
+    const lastFrame = Buffer.from(lastSent ?? []);
+    expect(lastFrame[0]).toBe(0x1e); // CMD_GET_CONTACT_BY_KEY
+    expect(lastFrame.subarray(1, 33).toString('hex')).toBe(pk);
   });
 
   it('de-duplicates: a burst of PUSH_ADVERTs for the same contact fires only one refresh', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
-      session.state.upsertContact(contact);
+    const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+    session.state.upsertContact(contact);
 
-      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
-      const sentBefore = transport.sent.length;
+    const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+    const sentBefore = transport.sent.length;
 
-      // Deliver three adverts in rapid succession (within the debounce window).
-      deliver(transport, advertFrame);
-      deliver(transport, advertFrame);
-      deliver(transport, advertFrame);
+    // Deliver three adverts in rapid succession (within the debounce window).
+    deliver(transport, advertFrame);
+    deliver(transport, advertFrame);
+    deliver(transport, advertFrame);
 
-      await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(100);
 
-      // Exactly one CMD_GET_CONTACT_BY_KEY should have been enqueued.
-      const refreshFrames = transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e);
-      expect(refreshFrames).toHaveLength(1);
-    } finally {
-      session.stop();
-    }
+    // Exactly one CMD_GET_CONTACT_BY_KEY should have been enqueued.
+    const refreshFrames = transport.sent.slice(sentBefore).filter((f) => f[0] === 0x1e);
+    expect(refreshFrames).toHaveLength(1);
   });
 
   it('PUSH_ADVERT refresh: ingests the updated contact record when the radio replies', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
-      session.state.upsertContact(contact);
+    const contact: Models.Contact = { key: `c:${pk}`, publicKeyHex: pk, name: 'Alice', kind: 'chat' };
+    session.state.upsertContact(contact);
 
-      const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
-      deliver(transport, advertFrame);
+    const advertFrame = Buffer.concat([Buffer.from([0x80]), Buffer.from(pk, 'hex')]);
+    deliver(transport, advertFrame);
 
-      const sentBefore = transport.sent.length;
-      await vi.advanceTimersByTimeAsync(100); // fire the refresh timer
+    const sentBefore = transport.sent.length;
+    await vi.advanceTimersByTimeAsync(100); // fire the refresh timer
 
-      // The GET_CONTACT_BY_KEY was sent; reply with an updated name.
-      const reply = contactFrame(pk, 'Alice-Updated');
-      deliver(transport, reply);
-      await vi.runAllTimersAsync();
+    // The GET_CONTACT_BY_KEY was sent; reply with an updated name.
+    const reply = contactFrame(pk, 'Alice-Updated');
+    deliver(transport, reply);
+    await vi.runAllTimersAsync();
 
-      // The updated name should now be reflected in local state.
-      const updated = session.state.getContacts().find((c) => c.key === `c:${pk}`);
-      expect(updated?.name).toBe('Alice-Updated');
-      void sentBefore; // silence unused-var lint
-    } finally {
-      session.stop();
-    }
+    // The updated name should now be reflected in local state.
+    const updated = session.state.getContacts().find((c) => c.key === `c:${pk}`);
+    expect(updated?.name).toBe('Alice-Updated');
+    void sentBefore; // silence unused-var lint
   });
 });
 
 describe('contact deltas', () => {
   it('emits contactUpserted with the merged Contact on a sync record', () => {
     const { session, transport } = makeSession();
-    try {
-      const seen: Models.Contact[] = [];
-      session.events.on('contactUpserted', (c) => seen.push(c));
-      deliver(transport, contactFrame(pk, 'Alice'));
-      expect(seen).toHaveLength(1);
-      expect(seen[0].key).toBe(`c:${pk}`);
-      expect(seen[0].name).toBe('Alice');
-      expect(seen[0].kind).toBe('chat');
-    } finally {
-      session.stop();
-    }
+    const seen: Models.Contact[] = [];
+    session.events.on('contactUpserted', (c) => seen.push(c));
+    deliver(transport, contactFrame(pk, 'Alice'));
+    expect(seen).toHaveLength(1);
+    expect(seen[0].key).toBe(`c:${pk}`);
+    expect(seen[0].name).toBe('Alice');
+    expect(seen[0].kind).toBe('chat');
   });
 
   it('emits contactRemoved when the radio evicts a contact', () => {
     const { session, transport } = makeSession();
-    try {
-      deliver(transport, contactFrame(pk, 'Alice'));
-      const removed: string[] = [];
-      session.events.on('contactRemoved', (key) => removed.push(key));
-      // PUSH_CODE_CONTACT_DELETED [0x8f][32B pubkey]
-      deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
-      expect(removed).toEqual([`c:${pk}`]);
-    } finally {
-      session.stop();
-    }
+    deliver(transport, contactFrame(pk, 'Alice'));
+    const removed: string[] = [];
+    session.events.on('contactRemoved', (key) => removed.push(key));
+    // PUSH_CODE_CONTACT_DELETED [0x8f][32B pubkey]
+    deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
+    expect(removed).toEqual([`c:${pk}`]);
   });
 
   it('emits contactRemoved when a placeholder is reconciled to a full key', () => {
     const { session, transport } = makeSession();
-    try {
-      const prefix = pk.slice(0, 12);
-      session.state.upsertContact({
-        key: `c:${prefix}`,
-        publicKeyHex: prefix,
-        name: `(${prefix})`,
-        kind: 'chat',
-      });
-      const removed: string[] = [];
-      session.events.on('contactRemoved', (key) => removed.push(key));
-      deliver(transport, contactFrame(pk, 'Alice'));
-      expect(removed).toEqual([`c:${prefix}`]);
-      expect(session.state.getContact(`c:${prefix}`)).toBeNull();
-      expect(session.state.getContact(`c:${pk}`)?.name).toBe('Alice');
-    } finally {
-      session.stop();
-    }
+    const prefix = pk.slice(0, 12);
+    session.state.upsertContact({
+      key: `c:${prefix}`,
+      publicKeyHex: prefix,
+      name: `(${prefix})`,
+      kind: 'chat',
+    });
+    const removed: string[] = [];
+    session.events.on('contactRemoved', (key) => removed.push(key));
+    deliver(transport, contactFrame(pk, 'Alice'));
+    expect(removed).toEqual([`c:${prefix}`]);
+    expect(session.state.getContact(`c:${prefix}`)).toBeNull();
+    expect(session.state.getContact(`c:${pk}`)?.name).toBe('Alice');
   });
 
   it('emits contactRemoved when removeContactFromRadio drops a contact', async () => {
     const { session, transport } = makeSession();
-    try {
-      deliver(transport, contactFrame(pk, 'Alice'));
-      const removed: string[] = [];
-      session.events.on('contactRemoved', (key) => removed.push(key));
-      await session.removeContactFromRadio(pk);
-      expect(removed).toEqual([`c:${pk}`]);
-      expect(session.state.getContact(`c:${pk}`)).toBeNull();
-    } finally {
-      session.stop();
-    }
+    deliver(transport, contactFrame(pk, 'Alice'));
+    const removed: string[] = [];
+    session.events.on('contactRemoved', (key) => removed.push(key));
+    await session.removeContactFromRadio(pk);
+    expect(removed).toEqual([`c:${pk}`]);
+    expect(session.state.getContact(`c:${pk}`)).toBeNull();
   });
 
   it('does not emit contactRemoved for a key that was never present', () => {
     const { session, transport } = makeSession();
-    try {
-      const removed: string[] = [];
-      session.events.on('contactRemoved', (key) => removed.push(key));
-      deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
-      expect(removed).toEqual([]);
-    } finally {
-      session.stop();
-    }
+    const removed: string[] = [];
+    session.events.on('contactRemoved', (key) => removed.push(key));
+    deliver(transport, Buffer.concat([Buffer.from([0x8f]), Buffer.from(pk, 'hex')]));
+    expect(removed).toEqual([]);
   });
 });
 
@@ -505,25 +473,21 @@ function driveSync(transport: Transports.Loopback, n: number, lastmod = 0): void
 describe('contacts bulk sync: full-list emits are O(1), not O(N)', () => {
   function countsFor(n: number) {
     const { session, transport } = makeSession();
-    try {
-      const counts = { contacts: 0, discovered: 0, contactUpserted: 0, contactsSynced: 0 };
-      session.events.on('contacts', () => {
-        counts.contacts += 1;
-      });
-      session.events.on('discovered', () => {
-        counts.discovered += 1;
-      });
-      session.events.on('contactUpserted', () => {
-        counts.contactUpserted += 1;
-      });
-      session.events.on('contactsSynced', () => {
-        counts.contactsSynced += 1;
-      });
-      driveSync(transport, n);
-      return { ...counts };
-    } finally {
-      session.stop();
-    }
+    const counts = { contacts: 0, discovered: 0, contactUpserted: 0, contactsSynced: 0 };
+    session.events.on('contacts', () => {
+      counts.contacts += 1;
+    });
+    session.events.on('discovered', () => {
+      counts.discovered += 1;
+    });
+    session.events.on('contactUpserted', () => {
+      counts.contactUpserted += 1;
+    });
+    session.events.on('contactsSynced', () => {
+      counts.contactsSynced += 1;
+    });
+    driveSync(transport, n);
+    return { ...counts };
   }
 
   it('emits exactly one contacts + one discovered regardless of N', () => {
@@ -543,71 +507,55 @@ describe('contacts bulk sync: full-list emits are O(1), not O(N)', () => {
 
   it('flushes contacts, then discovered, then contactsSynced', () => {
     const { session, transport } = makeSession();
-    try {
-      const order: string[] = [];
-      let flushedLength = 0;
-      session.events.on('contacts', (all) => {
-        order.push('contacts');
-        flushedLength = all.length;
-      });
-      session.events.on('discovered', () => order.push('discovered'));
-      session.events.on('contactsSynced', () => order.push('contactsSynced'));
-      driveSync(transport, 3);
-      expect(order).toEqual(['contacts', 'discovered', 'contactsSynced']);
-      expect(flushedLength).toBe(3);
-    } finally {
-      session.stop();
-    }
+    const order: string[] = [];
+    let flushedLength = 0;
+    session.events.on('contacts', (all) => {
+      order.push('contacts');
+      flushedLength = all.length;
+    });
+    session.events.on('discovered', () => order.push('discovered'));
+    session.events.on('contactsSynced', () => order.push('contactsSynced'));
+    driveSync(transport, 3);
+    expect(order).toEqual(['contacts', 'discovered', 'contactsSynced']);
+    expect(flushedLength).toBe(3);
   });
 
   it('reports the delivered count and most_recent_lastmod', () => {
     const { session, transport } = makeSession();
-    try {
-      const seen: Models.ContactsSyncedSummary[] = [];
-      session.events.on('contactsSynced', (s) => seen.push(s));
-      driveSync(transport, 3, 4242);
-      expect(seen).toEqual([{ count: 3, mostRecentLastmod: 4242 }]);
-    } finally {
-      session.stop();
-    }
+    const seen: Models.ContactsSyncedSummary[] = [];
+    session.events.on('contactsSynced', (s) => seen.push(s));
+    driveSync(transport, 3, 4242);
+    expect(seen).toEqual([{ count: 3, mostRecentLastmod: 4242 }]);
   });
 
   it('an empty iteration still flushes both snapshots', () => {
     // reconcileOnRadio rewrites on_radio without going through an emit helper,
     // so the flush must not be conditional on a delta having fired.
     const { session, transport } = makeSession();
-    try {
-      const counts = { contacts: 0, discovered: 0 };
-      session.events.on('contacts', () => {
-        counts.contacts += 1;
-      });
-      session.events.on('discovered', () => {
-        counts.discovered += 1;
-      });
-      driveSync(transport, 0);
-      expect(counts).toEqual({ contacts: 1, discovered: 1 });
-    } finally {
-      session.stop();
-    }
+    const counts = { contacts: 0, discovered: 0 };
+    session.events.on('contacts', () => {
+      counts.contacts += 1;
+    });
+    session.events.on('discovered', () => {
+      counts.discovered += 1;
+    });
+    driveSync(transport, 0);
+    expect(counts).toEqual({ contacts: 1, discovered: 1 });
   });
 
   it('emits contactRemoved for a contact the radio no longer lists', () => {
     const { session, transport } = makeSession();
-    try {
-      const stale = 'cc'.repeat(32);
-      session.state.upsertContact({
-        key: `c:${stale}`,
-        publicKeyHex: stale,
-        name: 'Stale',
-        kind: 'chat',
-      });
-      const removed: string[] = [];
-      session.events.on('contactRemoved', (key) => removed.push(key));
-      driveSync(transport, 1);
-      expect(removed).toEqual([`c:${stale}`]);
-    } finally {
-      session.stop();
-    }
+    const stale = 'cc'.repeat(32);
+    session.state.upsertContact({
+      key: `c:${stale}`,
+      publicKeyHex: stale,
+      name: 'Stale',
+      kind: 'chat',
+    });
+    const removed: string[] = [];
+    session.events.on('contactRemoved', (key) => removed.push(key));
+    driveSync(transport, 1);
+    expect(removed).toEqual([`c:${stale}`]);
   });
 });
 
@@ -625,108 +573,92 @@ describe('contacts bulk sync: the window always closes', () => {
   it('flushes without contactsSynced when the radio abandons the iteration', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      let contacts = 0;
-      let synced = 0;
-      session.events.on('contacts', () => {
-        contacts += 1;
-      });
-      session.events.on('contactsSynced', () => {
-        synced += 1;
-      });
+    let contacts = 0;
+    let synced = 0;
+    session.events.on('contacts', () => {
+      contacts += 1;
+    });
+    session.events.on('contactsSynced', () => {
+      synced += 1;
+    });
 
-      openPartialSync(transport);
-      expect(contacts).toBe(0); // coalesced, not yet flushed
+    openPartialSync(transport);
+    expect(contacts).toBe(0); // coalesced, not yet flushed
 
-      await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(11_000);
 
-      expect(contacts).toBe(1); // watchdog forced the flush
-      expect(synced).toBe(0); // no iteration completed
-    } finally {
-      session.stop();
-    }
+    expect(contacts).toBe(1); // watchdog forced the flush
+    expect(synced).toBe(0); // no iteration completed
   });
 
   it('re-arms the watchdog on every RESP_CONTACT, not just at START', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    try {
-      let contacts = 0;
-      session.events.on('contacts', () => {
-        contacts += 1;
-      });
+    let contacts = 0;
+    session.events.on('contacts', () => {
+      contacts += 1;
+    });
 
-      const start = Buffer.alloc(5);
-      start[0] = 0x02;
-      start.writeUInt32LE(3, 1);
-      deliver(transport, start);
+    const start = Buffer.alloc(5);
+    start[0] = 0x02;
+    start.writeUInt32LE(3, 1);
+    deliver(transport, start);
 
-      // Two contacts, ~8s apart — each below the 10s idle timeout on its
-      // own, but 16s have elapsed since RESP_CONTACTS_START by the end. If
-      // the window only watched the clock from START (no per-contact
-      // re-arm), the 10s watchdog would have force-closed it partway
-      // through. Since every RESP_CONTACT re-arms the timer, the window
-      // must still be open.
-      deliver(transport, contactFrame('aa'.repeat(32), 'Alice'));
-      await vi.advanceTimersByTimeAsync(8_000);
-      deliver(transport, contactFrame('bb'.repeat(32), 'Bob'));
-      await vi.advanceTimersByTimeAsync(8_000);
+    // Two contacts, ~8s apart — each below the 10s idle timeout on its
+    // own, but 16s have elapsed since RESP_CONTACTS_START by the end. If
+    // the window only watched the clock from START (no per-contact
+    // re-arm), the 10s watchdog would have force-closed it partway
+    // through. Since every RESP_CONTACT re-arms the timer, the window
+    // must still be open.
+    deliver(transport, contactFrame('aa'.repeat(32), 'Alice'));
+    await vi.advanceTimersByTimeAsync(8_000);
+    deliver(transport, contactFrame('bb'.repeat(32), 'Bob'));
+    await vi.advanceTimersByTimeAsync(8_000);
 
-      expect(contacts).toBe(0); // still coalesced — the window never closed
-    } finally {
-      session.stop();
-    }
+    expect(contacts).toBe(0); // still coalesced — the window never closed
   });
 
   it('flushes without contactsSynced when the transport drops mid-sync', () => {
     const { session, transport } = makeSession();
-    try {
-      let contacts = 0;
-      let synced = 0;
-      session.events.on('contacts', () => {
-        contacts += 1;
-      });
-      session.events.on('contactsSynced', () => {
-        synced += 1;
-      });
+    let contacts = 0;
+    let synced = 0;
+    session.events.on('contacts', () => {
+      contacts += 1;
+    });
+    session.events.on('contactsSynced', () => {
+      synced += 1;
+    });
 
-      transport.setState('connected'); // arms the handshake
-      openPartialSync(transport);
-      const beforeDrop = contacts;
+    transport.setState('connected'); // arms the handshake
+    openPartialSync(transport);
+    const beforeDrop = contacts;
 
-      transport.setState('error'); // wasConnected → disconnect branch
+    transport.setState('error'); // wasConnected → disconnect branch
 
-      expect(contacts).toBe(beforeDrop + 1);
-      expect(synced).toBe(0);
-    } finally {
-      session.stop();
-    }
+    expect(contacts).toBe(beforeDrop + 1);
+    expect(synced).toBe(0);
   });
 
   it('does not latch the gate into the next sync', () => {
     const { session, transport } = makeSession();
-    try {
-      let contacts = 0;
-      session.events.on('contacts', () => {
-        contacts += 1;
-      });
+    let contacts = 0;
+    session.events.on('contacts', () => {
+      contacts += 1;
+    });
 
-      openPartialSync(transport); // window left open
-      expect(contacts).toBe(0); // coalesced, not yet flushed
+    openPartialSync(transport); // window left open
+    expect(contacts).toBe(0); // coalesced, not yet flushed
 
-      driveSync(transport, 2); // a fresh START..END pair must still flush
-      // Two distinct flushes are expected here, not just "at least one":
-      // the fresh RESP_CONTACTS_START re-opens on top of an already-open
-      // window, so openContactsBulk's re-entrancy close flushes window 1's
-      // suppressed snapshot first (flush #1); RESP_END_OF_CONTACTS then
-      // flushes window 2's snapshot once more (flush #2). A `>=1` assertion
-      // can't tell a genuine re-entrancy close from a broken one — deleting
-      // either close path still leaves a single flush from the other, so
-      // this must pin the exact count.
-      expect(contacts).toBe(2);
-      expect(session.state.getContacts()).toHaveLength(2);
-    } finally {
-      session.stop();
-    }
+    driveSync(transport, 2); // a fresh START..END pair must still flush
+    // Two distinct flushes are expected here, not just "at least one":
+    // the fresh RESP_CONTACTS_START re-opens on top of an already-open
+    // window, so openContactsBulk's re-entrancy close flushes window 1's
+    // suppressed snapshot first (flush #1); RESP_END_OF_CONTACTS then
+    // flushes window 2's snapshot once more (flush #2). A `>=1` assertion
+    // can't tell a genuine re-entrancy close from a broken one — deleting
+    // either close path still leaves a single flush from the other, so
+    // this must pin the exact count.
+    expect(contacts).toBe(2);
+    expect(session.state.getContacts()).toHaveLength(2);
   });
 });

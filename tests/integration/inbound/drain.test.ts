@@ -13,16 +13,11 @@ const DRAIN_INTERVAL_MS = 250;
 const hex = (f: Uint8Array) => Buffer.from(f).toString('hex');
 
 describe('inbox drain pump', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => {
-    stop?.();
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it('pumps one GET_NEXT_MSG per queue event, coalescing + chaining to NO_MORE', async () => {
     vi.useFakeTimers();
-    const { session, transport } = makeSession();
-    stop = () => session.stop();
+    const { transport } = makeSession();
 
     // One MSG_WAITING → one GET_NEXT after the drain interval.
     deliver(transport, MSG_WAITING);

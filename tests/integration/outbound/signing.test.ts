@@ -1,19 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Errors } from '../../../src/index.js';
-import { deliver, makeSession } from '../../support/harness.js';
+import { deliver, flush, lastSent, makeSession } from '../../support/harness.js';
 
 const SIG = 'cd'.repeat(64);
 const RESP_OK = Buffer.from([0x00]);
-const lastSent = (t: { sent: Uint8Array[] }) => {
-  const last = t.sent.at(-1);
-  return last ? Buffer.from(last) : undefined;
-};
-
-// Yield to the event loop so a pending writeFrame lands in transport.sent before we
-// inject the next reply. setTimeout(0) drains the full microtask chain that
-// ctx.request → writeFrame → send schedules.
-const flush = () => new Promise((r) => setTimeout(r, 0));
 
 function signStartReply(maxLen: number): Buffer {
   const frame = Buffer.alloc(6);
@@ -28,12 +19,8 @@ function signatureReply(sigHex: string): Buffer {
 }
 
 describe('outbound message signing', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('drives START → DATA → FINISH and resolves with the signature', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const data = Buffer.from([0x01, 0x02, 0x03]);
 
     const p = session.signData(data);
@@ -54,7 +41,6 @@ describe('outbound message signing', () => {
 
   it('splits data larger than the chunk size into multiple SIGN_DATA frames', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const data = Buffer.alloc(200, 0xab); // 200 > 128 chunk → 128 + 72
 
     const p = session.signData(data);
@@ -83,7 +69,6 @@ describe('outbound message signing', () => {
 
   it('signs empty data with no SIGN_DATA frames (START → FINISH)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const p = session.signData(Buffer.alloc(0));
     await flush();
     expect(lastSent(transport)?.[0]).toBe(0x21);
@@ -98,7 +83,6 @@ describe('outbound message signing', () => {
 
   it('rejects without sending data when the payload exceeds the device max', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const p = session.signData(Buffer.alloc(5));
     await flush();
     expect(lastSent(transport)?.[0]).toBe(0x21);
@@ -111,7 +95,6 @@ describe('outbound message signing', () => {
 
   it('rejects Errors.ProtocolError when a chunk is refused (RESP_ERR BAD_STATE)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     const p = session.signData(Buffer.from([0xaa]));
     await flush();
     deliver(transport, signStartReply(8192));

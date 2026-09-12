@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Models } from '../../src/index';
 import { deliver, makeSession } from '../support/harness';
 
@@ -19,12 +19,8 @@ function respContact(pkHex: string, outPathLen: number, outPathHex: string, name
 }
 
 describe('setContactPath packs the firmware path_len byte', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('encodes a 2-byte-mode path with the packed byte 35, not a raw byte count', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     // Default pathHashMode is 2.
     const contact: Models.Contact = { key: `c:${PK}`, publicKeyHex: PK, name: 'Bob', kind: 'chat' };
     session.state.upsertContact(contact);
@@ -44,12 +40,8 @@ describe('setContactPath packs the firmware path_len byte', () => {
 });
 
 describe('addContactToRadio re-encodes a stored path with the packed byte', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('packs byte 35 from the stored 2-byte path (0x42), not the raw byte length', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.discovered.upsert(
       {
         publicKeyHex: PK,
@@ -80,12 +72,8 @@ describe('addContactToRadio re-encodes a stored path with the packed byte', () =
 });
 
 describe('setContactFavourite re-encodes a stored path with the packed byte', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('packs byte 35 from the stored 2-byte path when round-tripping the favourite flag', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.discovered.upsert(
       {
         publicKeyHex: PK,
@@ -112,12 +100,8 @@ describe('setContactFavourite re-encodes a stored path with the packed byte', ()
 });
 
 describe('upsertOnRadioContact derives hashSize from the contact byte, not the radio mode', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('a synced 2-byte contact keeps outPathHashSize=2 even when the radio is in 3-byte mode', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     // Force the radio's current path-hash mode to 3 to prove the contact's own
     // out_path_len (0x42 → 2-byte) wins.
     session.state.setRadioSettings({ ...session.state.getRadioSettings(), pathHashMode: 3 });

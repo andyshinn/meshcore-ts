@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deliver, makeSession } from '../../support/harness';
 
 // RESP_CONTACT (0x03) carries a full 148-byte record (same layout as
@@ -23,12 +23,8 @@ const startFrame = (total: number) => {
 const endFrame = Buffer.from([0x04, 0x00, 0x00, 0x00, 0x00]); // RESP_END_OF_CONTACTS
 
 describe('inbound contacts iterator via the feature registry + contactsSync bridge', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('drives syncProgress 0/2 → 1/2 → 2/2 → 2/2 and surfaces both contacts', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const progress: Array<{ done: number; total: number }> = [];
     const onProgress = (p: { contacts: { done: number; total: number } }) => progress.push({ ...p.contacts });
@@ -65,7 +61,6 @@ describe('inbound contacts iterator via the feature registry + contactsSync brid
 
   it('self-heals when more contacts arrive than CONTACTS_START promised', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const progress: Array<{ done: number; total: number }> = [];
     const onProgress = (p: { contacts: { done: number; total: number } }) => progress.push({ ...p.contacts });

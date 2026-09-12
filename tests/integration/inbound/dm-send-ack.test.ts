@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
@@ -46,12 +46,8 @@ const contact = (pk: string, name: string): Models.Contact => ({
 });
 
 describe('direct-message send / ack state machine', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('flips sending→sent on RESP_SENT and sent→ack on SEND_CONFIRMED', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 'Bob'));
 
     const states: Array<{ id: string; state: string }> = [];
@@ -73,7 +69,6 @@ describe('direct-message send / ack state machine', () => {
 
   it('pops the DM queue FIFO across two RESP_SENT frames', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 'Bob'));
 
     const states: Array<{ id: string; state: string }> = [];
@@ -96,7 +91,6 @@ describe('direct-message send / ack state machine', () => {
 
   it('synthesises a placeholder contact for a DM from an unknown sender', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const unknownPrefix = 'bbbbbbbbbbbb'; // 6 bytes, no matching contact
     deliver(transport, contactMsgV3(unknownPrefix, 'hello there'));
@@ -109,7 +103,6 @@ describe('direct-message send / ack state machine', () => {
 
   it('fails the oldest in-flight DM on a bare RESP_ERR', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 'Bob'));
 
     const states: Array<{ id: string; state: string }> = [];
@@ -133,7 +126,6 @@ describe('direct-message send / ack state machine', () => {
   // next RESP_SENT ahead of the DM FIFO.
   it('lets the admin hook consume RESP_SENT ahead of the DM queue', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     // Give the contact a known out_path so the anon owner request skips the
     // flood zero-hop dance — the admin RESP_SENT awaiter is then armed
     // synchronously, making this seam test deterministic.

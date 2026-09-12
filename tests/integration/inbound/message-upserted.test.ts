@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Message } from '../../../src/model/types.js';
 import { deliver, makeSession } from '../../support/harness';
 
@@ -34,12 +34,8 @@ function contactMsgV3(prefixHex: string, body: string): Buffer {
 }
 
 describe('inbound messageUpserted bus event', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('fires once for an inbound channel message', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.markChannelPresent({ key: 'ch:General', name: 'General', kind: 'public', idx: 0 });
 
     const upserted: Message[] = [];
@@ -53,7 +49,6 @@ describe('inbound messageUpserted bus event', () => {
 
   it('fires once for an inbound direct message', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const upserted: Message[] = [];
     session.events.on('messageUpserted', (m: Message) => upserted.push(m));
@@ -73,7 +68,6 @@ describe('inbound messageUpserted bus event', () => {
   // re-introducing the read fails here rather than on someone's radio.
   it('leaves rssi off meta — V3 header bytes 2-3 are reserved, not rssi', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.markChannelPresent({ key: 'ch:General', name: 'General', kind: 'public', idx: 0 });
 
     const upserted: Message[] = [];

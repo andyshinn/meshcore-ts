@@ -1,11 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Models } from '../../../src/index.js';
-import { deliver, makeSession } from '../../support/harness';
+import { deliver, flush, makeSession } from '../../support/harness';
 
 const PK = 'aa'.repeat(32);
 const PREFIX = 'aaaaaaaaaaaa'; // first 6 bytes of PK
-const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const repeater = (): Models.Contact => ({
   key: `c:${PK}`,
@@ -86,16 +85,12 @@ function cliReply(prefixHex: string, body: string): Buffer {
 }
 
 describe('repeater administration', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('logs in (mesh mode) and records the admin session on PUSH_LOGIN_SUCCESS', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const p = session.repeaterLogin(`c:${PK}`, 'pw');
-    await tick();
+    await flush();
     expect(transport.sent[0][0]).toBe(0x1a); // CMD_SEND_LOGIN (radio floods when out_path unknown)
     deliver(transport, loginSuccess(PREFIX));
     const result = await p;
@@ -108,11 +103,10 @@ describe('repeater administration', () => {
 
   it('round-trips owner-info via the public anon OWNER request (RESP_SENT → BINARY_RESPONSE)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const p = session.repeaterRequestOwnerInfo(`c:${PK}`);
-    await tick();
+    await flush();
     // Owner info goes out as a PUBLIC anon request (CMD_SEND_ANON_REQ = 0x39),
     // not the login-gated binary req. The flood contact first gets a transient
     // zero-hop path (CMD_ADD_UPDATE_CONTACT = 0x09) so the request is direct.
@@ -121,7 +115,7 @@ describe('repeater administration', () => {
     // RESP_SENT hands back the tag — consumed by the admin queue (onSentTag),
     // NOT the DM FIFO.
     deliver(transport, respSent('deadbeef'));
-    await tick();
+    await flush();
     // The tagged anon OWNER response ([now u32][name\nowner]) wakes the awaiter.
     deliver(transport, binaryResponse('deadbeef', ownerAnonBody(1_700_000_000, 'Node A', 'owner notes')));
     const owner = await p;
@@ -134,7 +128,6 @@ describe('repeater administration', () => {
 
   it('emits repeaterStatus on PUSH_STATUS_RESPONSE for a known sender', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const events: Array<{ contactKey: string }> = [];
@@ -151,7 +144,6 @@ describe('repeater administration', () => {
 
   it('emits repeaterTelemetry via the binary-req path (sendTelemetryReq → RESP_SENT → BINARY_RESPONSE)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const events: Array<{ contactKey: string; fields: unknown[] }> = [];
@@ -166,10 +158,10 @@ describe('repeater administration', () => {
       if (req) expect(Buffer.from(req).subarray(33).toString('hex')).toBe('03');
 
       deliver(transport, respSent('deadbeef'));
-      await tick();
+      await flush();
       // The tagged PUSH_BINARY_RESPONSE carries the raw LPP (ch0 voltage 4.20 V).
       deliver(transport, binaryResponse('deadbeef', Buffer.from([0x00, 0x74, 0x01, 0xa4])));
-      await tick();
+      await flush();
 
       expect(events.at(-1)?.contactKey).toBe(`c:${PK}`);
       expect(events.at(-1)?.fields.length).toBeGreaterThan(0);
@@ -180,7 +172,6 @@ describe('repeater administration', () => {
 
   it('still emits repeaterTelemetry on a standalone PUSH_TELEMETRY_RESPONSE (self/legacy path)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const events: Array<{ contactKey: string }> = [];
@@ -196,7 +187,6 @@ describe('repeater administration', () => {
 
   it('resolves local stats from RESP_STATS', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.repeaterGetLocalStats('CORE');
     deliver(transport, localStatsCore());
@@ -206,11 +196,10 @@ describe('repeater administration', () => {
 
   it('resolves a CLI command reply routed by sender prefix', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const p = session.repeaterSendCli(`c:${PK}`, 'reboot now');
-    await tick();
+    await flush();
     deliver(transport, cliReply(PREFIX, 'OK rebooting'));
     const reply = await p;
     expect(reply).toBe('OK rebooting');
@@ -218,7 +207,6 @@ describe('repeater administration', () => {
 
   it('resolves a fire-and-forget CLI send on RESP_SENT without arming a reply wait', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const states: Array<{ contactKey: string; state: string }> = [];
@@ -227,7 +215,7 @@ describe('repeater administration', () => {
     session.events.on('messageState', (id) => messageStates.push(id));
 
     const p = session.repeaterSendCli(`c:${PK}`, 'reboot', { expectReply: false });
-    await tick();
+    await flush();
     expect(transport.sent[0][0]).toBe(0x02); // CMD_SEND_TXT_MSG
     expect(transport.sent[0][1]).toBe(1); // TXT_TYPE.CLI_DATA
 
@@ -240,27 +228,25 @@ describe('repeater administration', () => {
 
   it('cancels an in-flight CLI command via AbortSignal', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const ac = new AbortController();
     const reason = new Error('repeater switched');
     const p = session.repeaterSendCli(`c:${PK}`, 'ver', { signal: ac.signal });
-    await tick();
+    await flush();
     ac.abort(reason);
     await expect(p).rejects.toBe(reason);
 
     // A cancel does not poison the session: a follow-up command still registers
     // and still gets its own reply routed to it.
     const next = session.repeaterSendCli(`c:${PK}`, 'time', { timeoutMs: 500 });
-    await tick();
+    await flush();
     deliver(transport, cliReply(PREFIX, '1700000000'));
     await expect(next).resolves.toBe('1700000000');
   });
 
   it('surfaces a late reply to a cancelled command on cliUnmatched, not the message store', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(repeater());
 
     const late: Array<{ contactKey?: string; body: string }> = [];
@@ -268,12 +254,12 @@ describe('repeater administration', () => {
 
     const ac = new AbortController();
     const p = session.repeaterSendCli(`c:${PK}`, 'ver', { signal: ac.signal });
-    await tick();
+    await flush();
     ac.abort(new Error('cancelled'));
     await expect(p).rejects.toThrow(/cancelled/);
 
     deliver(transport, cliReply(PREFIX, 'v1.2.3'));
-    await tick();
+    await flush();
 
     expect(late).toEqual([{ contactKey: `c:${PK}`, body: 'v1.2.3' }]);
     expect(session.state.getMessagesForKey(`c:${PK}`)).toHaveLength(0);

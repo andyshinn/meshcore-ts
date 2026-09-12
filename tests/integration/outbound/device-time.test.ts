@@ -4,15 +4,10 @@ import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
 describe('device time round-trips', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => {
-    stop?.();
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it('getDeviceTime sends [0x05] and resolves RESP_CURR_TIME', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.getDeviceTime();
     await Promise.resolve();
@@ -23,7 +18,6 @@ describe('device time round-trips', () => {
 
   it('setDeviceTime resolves on RESP_OK', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.setDeviceTime(1_700_000_000);
     await Promise.resolve();
@@ -33,7 +27,6 @@ describe('device time round-trips', () => {
 
   it('setDeviceTime rejects with Errors.ProtocolError on RESP_ERR[ILLEGAL_ARG]', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.setDeviceTime(1);
     await Promise.resolve();
@@ -45,7 +38,6 @@ describe('device time round-trips', () => {
 
   it('getDeviceTime rejects when the transport disconnects mid-request', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     // Drive the session 'connected' so the later 'disconnected' edge runs the
     // transport-disconnect cleanup (which only fires on a connected→disconnected
     // transition).
@@ -60,7 +52,6 @@ describe('device time round-trips', () => {
   it('getDeviceTime rejects with Errors.ProtocolTimeoutError after the timeout elapses', async () => {
     vi.useFakeTimers();
     const { session } = makeSession();
-    stop = () => session.stop();
 
     const p = session.getDeviceTime();
     const expectation = expect(p).rejects.toBeInstanceOf(Errors.ProtocolTimeoutError);

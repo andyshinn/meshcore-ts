@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
@@ -24,12 +24,8 @@ function seedDiscovered(session: ReturnType<typeof makeSession>['session']): voi
 }
 
 describe('addContactToRadio reply handling', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('commits the contact on RESP_OK', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedDiscovered(session);
 
     const p = session.addContactToRadio(PUBKEY);
@@ -42,7 +38,6 @@ describe('addContactToRadio reply handling', () => {
 
   it('rejects with Errors.ContactTableFullError on RESP_ERR[0x03], leaving on_radio unset', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedDiscovered(session);
 
     const p = session.addContactToRadio(PUBKEY);
@@ -55,7 +50,6 @@ describe('addContactToRadio reply handling', () => {
 
   it('rejects generically on a bare RESP_ERR (no error code)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedDiscovered(session);
 
     const p = session.addContactToRadio(PUBKEY);

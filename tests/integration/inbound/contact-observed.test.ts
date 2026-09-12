@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Models } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness';
 
@@ -27,12 +27,8 @@ const SYNC_PK = 'a1'.repeat(32);
 const ADVERT_PK = 'cc'.repeat(32);
 
 describe('inbound contactObserved bus event', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('fires for sync (RESP_CONTACT) then advert (PUSH_NEW_ADVERT) ingestion', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
     session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>

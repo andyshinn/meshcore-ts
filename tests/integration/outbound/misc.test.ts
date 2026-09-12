@@ -1,22 +1,14 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
-import { deliver, makeSession } from '../../support/harness.js';
+import { describe, expect, it } from 'vitest';
+import { deliver, lastSent, makeSession } from '../../support/harness.js';
 
 const PK = 'aa'.repeat(32);
 const RESP_OK = Buffer.from([0x00]);
 const RESP_ERR = Buffer.from([0x01, 0x02]); // ERR + NOT_FOUND
-const lastSent = (t: { sent: Uint8Array[] }) => {
-  const last = t.sent.at(-1);
-  return last ? Buffer.from(last) : undefined;
-};
 
 describe('outbound misc queries', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('hasConnection maps RESP_OK→true and RESP_ERR→false', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p1 = session.hasConnection(PK);
     expect(lastSent(transport)?.[0]).toBe(0x1c); // CMD_HAS_CONNECTION
@@ -30,7 +22,6 @@ describe('outbound misc queries', () => {
 
   it('getAllowedRepeatFreq decodes the frequency ranges', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.getAllowedRepeatFreq();
     expect(lastSent(transport)?.[0]).toBe(0x3c); // CMD_GET_ALLOWED_REPEAT_FREQ

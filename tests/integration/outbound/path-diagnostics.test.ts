@@ -1,15 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Errors, type Models } from '../../../src/index.js';
-import { deliver, makeSession } from '../../support/harness.js';
+import { deliver, flush, lastSent, makeSession } from '../../support/harness.js';
 
 const PK = 'aa'.repeat(32);
 const PREFIX = 'aa'.repeat(6); // first 6 bytes of the pubkey
-const flush = () => new Promise((r) => setTimeout(r, 0));
-const lastSent = (t: { sent: Uint8Array[] }) => {
-  const last = t.sent.at(-1);
-  return last ? Buffer.from(last) : undefined;
-};
 
 const seedContact = (session: ReturnType<typeof makeSession>['session']): void => {
   session.state.upsertContact({
@@ -31,12 +26,8 @@ function respSent(): Buffer {
 }
 
 describe('outbound path diagnostics', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('sendPathDiscoveryReq dispatches, then resolves with the discovered paths', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedContact(session);
 
     const p = session.sendPathDiscoveryReq(`c:${PK}`);
@@ -68,7 +59,6 @@ describe('outbound path diagnostics', () => {
 
   it('sendPathDiscoveryReq rejects Errors.ProtocolError when the radio refuses dispatch', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedContact(session);
     const p = session.sendPathDiscoveryReq(`c:${PK}`);
     await flush();
@@ -78,7 +68,6 @@ describe('outbound path diagnostics', () => {
 
   it('a superseding discovery for the same contact survives the older one failing', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedContact(session);
     // Request A, then request B for the same contact: B supersedes A.
     const pA = session.sendPathDiscoveryReq(`c:${PK}`).catch((e) => `A:${(e as Error).message}`);
@@ -115,7 +104,6 @@ describe('outbound path diagnostics', () => {
 
   it('getAdvertPath returns the cached path on RESP_ADVERT_PATH', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedContact(session);
     const p = session.getAdvertPath(`c:${PK}`);
     await flush();
@@ -137,7 +125,6 @@ describe('outbound path diagnostics', () => {
 
   it('getAdvertPath returns null on RESP_ERR (no cached path)', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     seedContact(session);
     const p = session.getAdvertPath(`c:${PK}`);
     await flush();

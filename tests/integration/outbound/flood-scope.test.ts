@@ -1,12 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
-import { deliver, makeSession } from '../../support/harness.js';
+import { describe, expect, it } from 'vitest';
+import { deliver, lastSent, makeSession } from '../../support/harness.js';
 
 const RESP_OK = Buffer.from([0x00]);
-const lastSent = (t: { sent: Uint8Array[] }) => {
-  const last = t.sent.at(-1);
-  return last ? Buffer.from(last) : undefined;
-};
 
 function respDefaultScope(name: string, keyByte: number): Buffer {
   const f = Buffer.alloc(48);
@@ -17,12 +13,8 @@ function respDefaultScope(name: string, keyByte: number): Buffer {
 }
 
 describe('outbound flood scope', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('setFloodScopeKey writes [0x36][0x00][16B key] and resolves on RESP_OK', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.setFloodScopeKey({ keyHex: 'aa'.repeat(16) });
     expect(lastSent(transport)?.toString('hex')).toBe(`3600${'aa'.repeat(16)}`);
@@ -32,7 +24,6 @@ describe('outbound flood scope', () => {
 
   it('getDefaultFloodScope decodes the 48-byte set form', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.getDefaultFloodScope();
     expect(lastSent(transport)?.[0]).toBe(0x40); // CMD_GET_DEFAULT_FLOOD_SCOPE
@@ -42,7 +33,6 @@ describe('outbound flood scope', () => {
 
   it('getDefaultFloodScope resolves null on the 1-byte no-scope reply', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.getDefaultFloodScope();
     deliver(transport, Buffer.from([0x1c]));

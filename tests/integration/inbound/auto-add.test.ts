@@ -1,14 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deliver, makeSession } from '../../support/harness';
 
 describe('RESP_AUTOADD_CONFIG folds the flags byte into auto-add config', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('maps the flags byte into auto-add config and emits autoAddConfig', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const seen: Array<{ chat: boolean; repeater: boolean; overwriteOldest: boolean }> = [];
     const onCfg = (c: { chat: boolean; repeater: boolean; overwriteOldest: boolean }) => {

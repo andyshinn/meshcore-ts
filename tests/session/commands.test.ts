@@ -1,10 +1,11 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { channelHashOf } from '../../src/model/paths';
 import type { Channel } from '../../src/model/types';
-import { LoopbackTransport } from '../../src/ports/transport';
-import { MeshCoreSession } from '../../src/session/session';
+import type { LoopbackTransport } from '../../src/ports/transport';
+import type { MeshCoreSession } from '../../src/session/session';
 import { encryptGrpTxt } from '../support/grpTxt';
+import { makeSession } from '../support/harness';
 
 // A known channel with an explicit slot index so sendChannelText can address it.
 const channel: Channel = {
@@ -48,17 +49,12 @@ describe('MeshCoreSession command surface', () => {
   let session: MeshCoreSession;
 
   beforeEach(() => {
-    transport = new LoopbackTransport();
-    session = new MeshCoreSession({ transport });
-    session.start();
+    // makeSession registers its own onTestFinished teardown.
+    ({ session, transport } = makeSession());
     transport.setState('connected');
     // Drain the handshake's burst of writes so per-test assertions on
     // `transport.sent` start from a clean slate.
     transport.sent.length = 0;
-  });
-
-  afterEach(() => {
-    session.stop();
   });
 
   describe('sendChannelText', () => {

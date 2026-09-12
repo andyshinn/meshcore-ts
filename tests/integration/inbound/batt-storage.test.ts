@@ -1,14 +1,10 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deliver, makeSession } from '../../support/harness';
 
 describe('RESP_BATT_AND_STORAGE handled via the feature registry', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('folds battery + storage into device info and emits deviceInfo', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const emitted: { batteryMv?: number; storageUsedKb?: number }[] = [];
     const onInfo = (info: { batteryMv?: number; storageUsedKb?: number }) => {

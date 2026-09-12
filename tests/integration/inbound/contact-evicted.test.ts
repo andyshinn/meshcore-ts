@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { deliver, makeSession } from '../../support/harness';
 
 const PUBKEY = 'bb'.repeat(32);
@@ -12,12 +12,8 @@ function contactDeletedFrame(pubkeyHex: string): Buffer {
 }
 
 describe('inbound PUSH_CONTACT_DELETED', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('removes the contact and emits contactEvicted with its name', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.discovered.upsert(
       {
         publicKeyHex: PUBKEY,

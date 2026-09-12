@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Errors } from '../../../src/index.js';
 import { deliver, makeSession } from '../../support/harness.js';
 
@@ -9,12 +9,8 @@ import { deliver, makeSession } from '../../support/harness.js';
 // than reading past the frame. setDeviceTime awaits the RESP_OK/RESP_ERR ack
 // channel and re-throws Errors.ProtocolError, so it surfaces the parsed errorCode.
 describe('RESP_ERR frame-length handling on the ack path', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('a bare (1-byte) RESP_ERR rejects with Errors.ProtocolError and errorCode undefined', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.setDeviceTime(1000);
     await Promise.resolve(); // ack entry is registered synchronously; let writeFrame start
@@ -26,7 +22,6 @@ describe('RESP_ERR frame-length handling on the ack path', () => {
 
   it('a 2-byte RESP_ERR surfaces its firmware error byte as errorCode', async () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const p = session.setDeviceTime(1000);
     await Promise.resolve();

@@ -53,16 +53,10 @@ function lookupsFor(transport: Transports.Loopback, pubkeyHex: string): Buffer[]
 }
 
 describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => {
-    stop?.();
-    stop = undefined;
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it('touches a known contact last-seen and re-emits contacts', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 1_000));
 
     const emitted: Array<Array<{ key: string }>> = [];
@@ -80,8 +74,7 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
 
   it('looks up an advertiser it has never seen instead of dropping the advert', async () => {
     vi.useFakeTimers();
-    const { session, transport } = makeSession();
-    stop = () => session.stop();
+    const { transport } = makeSession();
 
     deliver(transport, advert(UNKNOWN_PK));
     expect(lookupsFor(transport, UNKNOWN_PK)).toHaveLength(0); // still inside the 50ms debounce
@@ -97,7 +90,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('adds the fetched record to the contact list when the radio answers the lookup', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const upserted: Models.Contact[] = [];
     const snapshots: Array<Array<{ key: string }>> = [];
@@ -123,7 +115,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('reports the fetched record as heard live rather than synced', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
     session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
@@ -142,8 +133,7 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
 
   it('collapses a burst of adverts for one pubkey into a single lookup', async () => {
     vi.useFakeTimers();
-    const { session, transport } = makeSession();
-    stop = () => session.stop();
+    const { transport } = makeSession();
 
     deliver(transport, advert(UNKNOWN_PK));
     deliver(transport, advert(UNKNOWN_PK));
@@ -156,7 +146,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('upgrades a pending path-update refresh to an advert when a 0x80 lands in the same window', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 1_000));
 
     const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
@@ -183,7 +172,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('upgrades a path-update refresh to an advert when a 0x80 lands while the lookup is out', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, 1_000));
 
     const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
@@ -213,7 +201,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('still ingests the advert when an app lookup races it for the same pubkey', async () => {
     vi.useFakeTimers();
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
     session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
@@ -242,7 +229,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('never moves last-seen backwards when the advertiser clock is behind ours', () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.state.upsertContact(contact(PK, NOW));
 
     // The record claims an advert timestamp a day old — a skewed remote RTC.
@@ -255,7 +241,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('stamps a first-seen contact with our clock, not the advertiser stale one', async () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     // We hear the advert NOW, but the node's own RTC is a day behind. There is no
     // existing row to preserve, so nothing but our own clock stands between
@@ -273,7 +258,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('keeps a contact the radio answered for mid-sync when the iteration ends', async () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     // The advert arrives first, so the lookup is already in flight when the
     // enumeration opens.
@@ -306,7 +290,6 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
   it('clamps an advertiser clock set in the future to the present', () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();
-    stop = () => session.stop();
 
     // 4e9 unix seconds is the year 2096: a node whose RTC is wildly ahead must
     // not pin last-seen to a timestamp that never falls out of "just heard".

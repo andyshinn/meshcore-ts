@@ -1,14 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { AdminSessionStore } from '../../src/features/adminSessions';
-import { createChannelsRuntime } from '../../src/features/channels';
-import { createContactsIterRuntime } from '../../src/features/contacts';
-import { createDeviceAdminRuntime } from '../../src/features/deviceAdmin';
-import { createDmRuntime, directMessagesFeature, failOldestDmSend, resetDmState } from '../../src/features/directMessages';
-import { createDrainRuntime } from '../../src/features/drain';
+import { directMessagesFeature, failOldestDmSend, resetDmState } from '../../src/features/directMessages';
 import type { FeatureContext } from '../../src/features/feature';
-import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
-import { PendingChannelSends } from '../../src/features/pendingChannelSends';
 import {
   buildAnonReplyPath,
   createAdminCorrRuntime,
@@ -23,59 +16,13 @@ import {
   sendBinaryReq,
   sendTelemetryReq,
 } from '../../src/features/repeaterAdmin';
-import { MeshObservations } from '../../src/model/meshObservations';
-import { SessionState } from '../../src/model/state/model';
+import type { SessionState } from '../../src/model/state/model';
 import type { Contact } from '../../src/model/types';
-import { MeshCoreEvents } from '../../src/ports/events';
-import { noopLogger } from '../../src/ports/logger';
 import { PUSH, TXT_TYPE } from '../../src/protocol/codes';
+import { addContact as addFixtureContact, makeFeatureCtx as makeCtx, PK } from '../support/featureCtx';
+import { flush } from '../support/harness';
 
-// A full per-session ctx: real MeshCoreEvents + SessionState + AdminSessionStore
-// + rt (with adminCorr under test plus the sibling rt factories), capturing writes.
-function makeCtx(): {
-  ctx: FeatureContext;
-  state: SessionState;
-  events: MeshCoreEvents;
-  admin: AdminSessionStore;
-  writes: Buffer[];
-} {
-  const state = new SessionState();
-  const events = new MeshCoreEvents();
-  const admin = new AdminSessionStore();
-  const writes: Buffer[] = [];
-  const ctx: FeatureContext = {
-    writeFrame: async (frame: Buffer) => {
-      writes.push(frame);
-    },
-    request: async () => {
-      throw new Error('request not used in these tests');
-    },
-    requestOrNull: async () => null,
-    events,
-    state,
-    log: noopLogger,
-    admin,
-    rt: {
-      meshObs: new MeshObservations(),
-      pendingChannelSends: new PendingChannelSends(),
-      deviceAdmin: createDeviceAdminRuntime(),
-      drain: createDrainRuntime(),
-      channels: createChannelsRuntime(),
-      contactsIter: createContactsIterRuntime(),
-      pathDisc: createPathDiagRuntime(),
-      dm: createDmRuntime(),
-      adminCorr: createAdminCorrRuntime(),
-    },
-    getTransportState: () => 'connected',
-    contactsSync: () => {},
-  };
-  return { ctx, state, events, admin, writes };
-}
-
-// 32-byte (64 hex) public key; first 6 bytes (12 hex) are the prefix.
-const PK = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899';
 const PREFIX = 'aabbccddeeff';
-const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // RESP_SENT: [0x06][flood][expected_ack u32 LE][est u32 LE].
 function sentTag(tagHex: string): Buffer {
@@ -89,17 +36,9 @@ function binaryResp(tagHex: string, body: Buffer): Buffer {
   return Buffer.concat([Buffer.from([PUSH.BINARY_RESPONSE, 0x00]), Buffer.from(tagHex, 'hex'), body]);
 }
 
-function addContact(state: SessionState, overrides: Partial<Contact> = {}): Contact {
-  const contact: Contact = {
-    key: `c:${PK}`,
-    publicKeyHex: PK,
-    name: 'Repeater',
-    kind: 'repeater',
-    ...overrides,
-  };
-  state.upsertContact(contact);
-  return contact;
-}
+// The fixture contact these tests address is a repeater, not a chat peer.
+const addContact = (state: SessionState, overrides: Partial<Contact> = {}): Contact =>
+  addFixtureContact(state, { name: 'Repeater', kind: 'repeater', ...overrides });
 
 // PUSH_LOGIN_SUCCESS v6+ frame: [0x85][perms u8][6B prefix][tag u32 LE][acl u8][fw u8].
 function loginSuccessFrame(prefixHex: string, perms: number, acl: number, fw: number): Buffer {
@@ -373,7 +312,7 @@ describe('repeaterAdmin: sendAnonReq', () => {
     registerAdminHooks(ctx);
 
     const p = sendAnonReq(ctx, `c:${PK}`, 0x02);
-    await tick(); // let the awaited zero-hop write + queue-push settle
+    await flush(); // let the awaited zero-hop write + queue-push settle
 
     // 1st write: CMD_ADD_UPDATE_CONTACT with a zero-hop (empty) path — byte 35 = 0.
     expect(writes[0][0]).toBe(0x09);
@@ -386,7 +325,7 @@ describe('repeaterAdmin: sendAnonReq', () => {
     directMessagesFeature.handle(0x06, sentTag('11223344'), ctx);
     repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('11223344', Buffer.from([0x01, 0x02])), ctx);
     await expect(p.then((b) => b.toString('hex'))).resolves.toBe('0102');
-    await tick();
+    await flush();
 
     // The flood contact is restored to OUT_PATH_UNKNOWN via CMD_RESET_PATH — no
     // leaked zero-hop path.
@@ -402,12 +341,12 @@ describe('repeaterAdmin: sendAnonReq', () => {
 
     const p = sendAnonReq(ctx, `c:${PK}`, 0x02);
     p.catch(() => {}); // will reject on resetAdmin
-    await tick();
+    await flush();
     expect(writes[0][0]).toBe(0x09); // zero-hop set happened
 
     resetAdmin(ctx, 'disconnected'); // fail the in-flight RESP_SENT awaiter
     await expect(p).rejects.toThrow('disconnected');
-    await tick();
+    await flush();
     // finally-net restored the flood path.
     expect(writes.some((w) => w[0] === 0x0d)).toBe(true);
   });
@@ -450,7 +389,7 @@ describe('repeaterAdmin: sendTelemetryReq (binary req)', () => {
     directMessagesFeature.handle(0x06, sentTag('deadbeef'), ctx);
     // tagged LPP: ch0 voltage 4.20 V
     repeaterAdminFeature.handle(PUSH.BINARY_RESPONSE, binaryResp('deadbeef', Buffer.from([0x00, 0x74, 0x01, 0xa4])), ctx);
-    await tick();
+    await flush();
 
     expect(seen.at(-1)?.contactKey).toBe(`c:${PK}`);
     expect(seen.at(-1)?.fields.length).toBeGreaterThan(0);
@@ -609,7 +548,7 @@ describe('repeaterAdmin: repeaterSendCli options — timeout + abort', () => {
     const ac = new AbortController();
     const reason = new Error('repeater switched');
     const p = repeaterSendCli(ctx, `c:${PK}`, 'ver', { signal: ac.signal });
-    await tick();
+    await flush();
     expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
 
     ac.abort(reason);
@@ -627,7 +566,7 @@ describe('repeaterAdmin: repeaterSendCli options — timeout + abort', () => {
     registerAdminHooks(ctx);
 
     const p = repeaterSendCli(ctx, `c:${PK}`, 'ver');
-    await tick();
+    await flush();
     expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
     // Settle it so the 30s timer doesn't hold the suite open.
     directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, 'v1.2.3'), ctx);
@@ -673,7 +612,7 @@ describe('repeaterAdmin: repeaterSendCli settles without unhandled rejections', 
     process.on('unhandledRejection', onUnhandled);
     try {
       await fn();
-      await tick();
+      await flush();
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
@@ -762,7 +701,7 @@ describe('repeaterAdmin: repeaterSendCli supersede/identity race', () => {
     // prefix would silently drop the live one, whose reply would then land on
     // cliUnmatched and whose caller would time out.
     failFirstWrite(new Error('transport down'));
-    await tick();
+    await flush();
     expect(ctx.rt.adminCorr.pendingCli.get(PREFIX)).toBe(secondEntry);
 
     directMessagesFeature.handle(0x10, cliReplyFrame(PREFIX, '1700000000'), ctx);
@@ -798,7 +737,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
     registerAdminHooks(ctx);
 
     const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
-    await tick();
+    await flush();
 
     expect(ctx.rt.adminCorr.pendingCli.size).toBe(0);
     expect(writes).toHaveLength(1);
@@ -818,7 +757,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
 
     const fire = repeaterSendCli(ctx, `c:${PK}`, 'clkreboot', { expectReply: false });
     const ask = repeaterSendCli(ctx, `c:${PK}`, 'ver');
-    await tick();
+    await flush();
 
     expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(true);
 
@@ -848,7 +787,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
     const ac = new AbortController();
     const reason = new Error('user cancelled');
     const p = repeaterSendCli(ctx, `c:${PK}`, 'start ota', { expectReply: false, signal: ac.signal });
-    await tick();
+    await flush();
     ac.abort(reason);
 
     await expect(p).rejects.toBe(reason);
@@ -867,7 +806,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
 
     // Generous timeout: only the failure itself may settle this promise.
     const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false, timeoutMs: 60_000 });
-    await tick();
+    await flush();
 
     resetDmState(ctx, 'transport disconnected');
     await expect(p).rejects.toThrow(/transport disconnected/);
@@ -880,7 +819,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
     registerAdminHooks(ctx);
 
     const p = repeaterSendCli(ctx, `c:${PK}`, 'poweroff', { expectReply: false, timeoutMs: 60_000 });
-    await tick();
+    await flush();
 
     failOldestDmSend(ctx, 'radio rejected send');
     await expect(p).rejects.toThrow(/radio rejected send/);
@@ -895,7 +834,7 @@ describe('repeaterAdmin: repeaterSendCli expectReply:false', () => {
     events.on('cliSendState', (e) => seen.push({ id: e.id, contactKey: e.contactKey, state: e.state }));
 
     const p = repeaterSendCli(ctx, `c:${PK}`, 'reboot', { expectReply: false });
-    await tick();
+    await flush();
     directMessagesFeature.handle(0x06, sentTag('deadbeef'), ctx);
     await expect(p).resolves.toBe('');
 

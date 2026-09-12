@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Message } from '../../../src/model/types.js';
 import { deliver, makeSession } from '../../support/harness';
 
@@ -19,12 +19,8 @@ function channelMsgV3(idx: number, ts: number, body: string): Buffer {
 }
 
 describe('inbound channel-message pipeline', () => {
-  let stop: (() => void) | undefined;
-  afterEach(() => stop?.());
-
   it('routes a received channel frame to state + storage + bus event', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     session.markChannelPresent({ key: 'ch:General', name: 'General', kind: 'public', idx: 0 });
 
     const emitted: Array<{ key: string; messages: Message[] }> = [];
@@ -40,7 +36,6 @@ describe('inbound channel-message pipeline', () => {
 
   it('drops a channel frame for an unknown slot', () => {
     const { session, transport } = makeSession();
-    stop = () => session.stop();
     deliver(transport, channelMsgV3(3, 1_700_000_001, 'Bob: yo'));
     expect(session.state.getRecentMessages()).toHaveLength(0);
   });
