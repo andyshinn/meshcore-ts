@@ -448,7 +448,7 @@ export function buildSendBinaryReq(destPublicKeyHex: string, reqData: Buffer): B
 // PUSH_STATUS_RESPONSE (firmware: companion_radio/MyMesh.cpp):
 //   [0x87][1B reserved][6B sender pub_key_prefix][status bytes...]
 // "status bytes" is the repeater's `RepeaterStats` struct, memcpy'd straight
-// onto the wire — see decodeStatusFields below for the layout. We surface
+// onto the wire — see STATUS_FIELDS below for the layout. We surface
 // (a) the sender prefix, (b) the raw hex payload so a renderer can fall back
 // to hex for firmware versions that grow the struct further, and (c) the
 // decoded fields.
@@ -475,54 +475,52 @@ export function parseStatusResponse(frame: Buffer): StatusResponse | null {
   };
 }
 
-// Decode the repeater status blob. The firmware memcpy's a packed, naturally
-// aligned `struct RepeaterStats` (no padding) straight onto the wire — see
-// MeshCore/examples/simple_repeater/MyMesh.h:44:
-//
-//   [0..1]   batt_milli_volts       uint16 LE (mV → V)
-//   [2..3]   curr_tx_queue_len      uint16 LE
-//   [4..5]   noise_floor            int16  LE (dBm)
-//   [6..7]   last_rssi              int16  LE (dBm)
-//   [8..11]  n_packets_recv         uint32 LE
-//   [12..15] n_packets_sent         uint32 LE
-//   [16..19] total_air_time_secs    uint32 LE (TX airtime)
-//   [20..23] total_up_time_secs     uint32 LE
-//   [24..27] n_sent_flood           uint32 LE
-//   [28..31] n_sent_direct          uint32 LE
-//   [32..35] n_recv_flood           uint32 LE
-//   [36..39] n_recv_direct          uint32 LE
-//   [40..41] err_events             uint16 LE (was `n_full_events`)
-//   [42..43] last_snr               int16  LE (SNR × 4 → divide for dB)
-//   [44..45] n_direct_dups          uint16 LE
-//   [46..47] n_flood_dups           uint16 LE
-//   [48..51] total_rx_air_time_secs uint32 LE
-//   [52..55] n_recv_errors          uint32 LE (added in firmware v1.12.0)
-//
-// Current firmware sends 56 bytes; pre-v1.12.0 repeaters send 52 (no
-// `n_recv_errors`). Each field is gated on the payload actually reaching it, so
-// shorter/legacy frames degrade to fewer fields rather than throwing.
+interface StatDescriptor {
+  name: string;
+  offset: number;
+  size: number;
+  read: (b: Buffer, o: number) => number | string;
+  unit?: string;
+}
+
+// The repeater status blob is a packed, naturally aligned `struct RepeaterStats`
+// memcpy'd straight onto the wire (no padding) — see
+// MeshCore/examples/simple_repeater/MyMesh.h:44. This table mirrors that struct
+// field-for-field; the trailing comment on each row is the firmware member name.
+// Keep it in declaration order: `decodeStatusFields` stops at the first field the
+// payload is too short to hold, which is what makes legacy frames degrade rather
+// than throw. Current firmware sends 56 bytes; pre-v1.12.0 repeaters send 52 (no
+// `n_recv_errors`).
+const STATUS_FIELDS: StatDescriptor[] = [
+  { name: 'Battery', offset: 0, size: 2, read: (b, o) => b.readUInt16LE(o) / 1000, unit: 'V' }, // batt_milli_volts
+  { name: 'TX queue', offset: 2, size: 2, read: (b, o) => b.readUInt16LE(o) }, // curr_tx_queue_len
+  { name: 'Noise floor', offset: 4, size: 2, read: (b, o) => b.readInt16LE(o), unit: 'dBm' }, // noise_floor
+  { name: 'Last RSSI', offset: 6, size: 2, read: (b, o) => b.readInt16LE(o), unit: 'dBm' }, // last_rssi
+  { name: 'RX packets', offset: 8, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_packets_recv
+  { name: 'TX packets', offset: 12, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_packets_sent
+  { name: 'TX airtime', offset: 16, size: 4, read: (b, o) => b.readUInt32LE(o), unit: 's' }, // total_air_time_secs
+  { name: 'Uptime', offset: 20, size: 4, read: (b, o) => formatUptime(b.readUInt32LE(o)) }, // total_up_time_secs
+  { name: 'Flood sent', offset: 24, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_sent_flood
+  { name: 'Direct sent', offset: 28, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_sent_direct
+  { name: 'Flood rx', offset: 32, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_recv_flood
+  { name: 'Direct rx', offset: 36, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_recv_direct
+  { name: 'Error events', offset: 40, size: 2, read: (b, o) => b.readUInt16LE(o) }, // err_events (was n_full_events)
+  { name: 'Last SNR', offset: 42, size: 2, read: (b, o) => b.readInt16LE(o) / 4, unit: 'dB' }, // last_snr (×4)
+  { name: 'Direct dups', offset: 44, size: 2, read: (b, o) => b.readUInt16LE(o) }, // n_direct_dups
+  { name: 'Flood dups', offset: 46, size: 2, read: (b, o) => b.readUInt16LE(o) }, // n_flood_dups
+  { name: 'RX airtime', offset: 48, size: 4, read: (b, o) => b.readUInt32LE(o), unit: 's' }, // total_rx_air_time_secs
+  { name: 'RX errors', offset: 52, size: 4, read: (b, o) => b.readUInt32LE(o) }, // n_recv_errors (firmware ≥ v1.12.0)
+];
+
+// Decode as much of the status blob as the payload actually carries. Truncated
+// and legacy (pre-v1.12.0) frames are prefixes of the same struct, so stopping at
+// the first field that doesn't fit yields every field that is present.
 function decodeStatusFields(b: Buffer): StatusField[] {
   const fields: StatusField[] = [];
-  const push = (name: string, value: number | string, unit?: string) => fields.push({ name, value, unit });
-
-  if (b.length >= 2) push('Battery', b.readUInt16LE(0) / 1000, 'V');
-  if (b.length >= 4) push('TX queue', b.readUInt16LE(2));
-  if (b.length >= 6) push('Noise floor', b.readInt16LE(4), 'dBm');
-  if (b.length >= 8) push('Last RSSI', b.readInt16LE(6), 'dBm');
-  if (b.length >= 12) push('RX packets', b.readUInt32LE(8));
-  if (b.length >= 16) push('TX packets', b.readUInt32LE(12));
-  if (b.length >= 20) push('TX airtime', b.readUInt32LE(16), 's');
-  if (b.length >= 24) push('Uptime', formatUptime(b.readUInt32LE(20)));
-  if (b.length >= 28) push('Flood sent', b.readUInt32LE(24));
-  if (b.length >= 32) push('Direct sent', b.readUInt32LE(28));
-  if (b.length >= 36) push('Flood rx', b.readUInt32LE(32));
-  if (b.length >= 40) push('Direct rx', b.readUInt32LE(36));
-  if (b.length >= 42) push('Error events', b.readUInt16LE(40));
-  if (b.length >= 44) push('Last SNR', b.readInt16LE(42) / 4, 'dB');
-  if (b.length >= 46) push('Direct dups', b.readUInt16LE(44));
-  if (b.length >= 48) push('Flood dups', b.readUInt16LE(46));
-  if (b.length >= 52) push('RX airtime', b.readUInt32LE(48), 's');
-  if (b.length >= 56) push('RX errors', b.readUInt32LE(52));
+  for (const f of STATUS_FIELDS) {
+    if (b.length < f.offset + f.size) break;
+    fields.push({ name: f.name, value: f.read(b, f.offset), unit: f.unit });
+  }
   return fields;
 }
 

@@ -234,6 +234,35 @@ describe('repeater decoders: parseStatusResponse', () => {
     expect(res?.fields.map((f) => f.name)).toEqual(['Battery', 'TX queue', 'Noise floor', 'Last RSSI']);
   });
 
+  // Guards the decoder's offset table. The sizes below are ground truth from the
+  // firmware struct, independent of the table in repeater.ts, so a wrong offset or
+  // size there shows up as the wrong set of fields at some truncation length. The
+  // decoder stops at the first field that doesn't fit, so at every length the
+  // decoded names must be exactly the struct prefix that fits.
+  it('exposes exactly the fields a truncated payload fully contains, at every length', () => {
+    // biome-ignore format: one entry per RepeaterStats member, in declaration order.
+    const struct: Array<[name: string, size: number]> = [
+      ['Battery', 2], ['TX queue', 2], ['Noise floor', 2], ['Last RSSI', 2],
+      ['RX packets', 4], ['TX packets', 4], ['TX airtime', 4], ['Uptime', 4],
+      ['Flood sent', 4], ['Direct sent', 4], ['Flood rx', 4], ['Direct rx', 4],
+      ['Error events', 2], ['Last SNR', 2], ['Direct dups', 2], ['Flood dups', 2],
+      ['RX airtime', 4], ['RX errors', 4],
+    ];
+    let end = 0;
+    const ends = struct.map(([, size]) => (end += size));
+    expect(end).toBe(56); // the struct the decoder claims to cover
+
+    const full = statsPayload(busy);
+    for (let len = 0; len <= full.length; len++) {
+      const res = parseStatusResponse(statusFrame(full.subarray(0, len)));
+      const expected = struct.filter((_, i) => ends[i] <= len).map(([name]) => name);
+      expect(
+        res?.fields.map((f) => f.name),
+        `payload length ${len}`,
+      ).toEqual(expected);
+    }
+  });
+
   it('returns null below 8 bytes', () => {
     expect(parseStatusResponse(Buffer.alloc(7))).toBeNull();
   });
