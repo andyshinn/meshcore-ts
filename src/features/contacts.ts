@@ -337,10 +337,23 @@ export function removeContact(ctx: FeatureContext, key: string): void {
 
 /** Whether the firmware would auto-store an advert of this ADV_TYPE, given the
  *  current auto-add config. Used to decide whether to re-sync after a
- *  not-on-radio advert. */
+ *  not-on-radio advert.
+ *
+ *  The master switch is bit 0 of `manualAddContacts` — firmware
+ *  `_prefs.manual_add_contacts`, mirrored from `RESP_SELF_INFO` byte 47 — NOT
+ *  the app-side `mode`. `MyMesh::shouldAutoAddContactType` returns `true`
+ *  before ever consulting `_prefs.autoadd_config` while that bit is clear, so:
+ *
+ *    bit 0 clear -> the radio auto-adds every kind; the per-kind flags are inert.
+ *    bit 0 set   -> the radio honours the per-kind flags; so do we.
+ *
+ *  `mode` is deliberately not consulted: the library never writes it, so it
+ *  sits at its `'all'` default for any consumer that doesn't seed the mirror
+ *  and would short-circuit this to `true` for every advert type. Only
+ *  radio-mirrored state can answer a question about what the radio would do. */
 export function shouldAutoAdd(ctx: FeatureContext, advType: number): boolean {
   const cfg = ctx.state.getAutoAddConfig();
-  if (cfg.mode === 'all') return true;
+  if ((cfg.manualAddContacts & 0x01) === 0) return true;
   switch (advType) {
     case ADV_TYPE.REPEATER:
       return cfg.repeater;
@@ -548,6 +561,31 @@ export function ingestContact(
     });
   }
 
+  // A refused advert (PUSH_NEW_ADVERT 0x8a) of a kind the radio auto-adds means
+  // our contact map is behind the radio's, so walk it. The firmware has THREE
+  // refusal early-returns in `BaseChatMesh::onAdvertRecv`, all emitting 0x8a
+  // (see PUSH.NEW_ADVERT in src/protocol/codes.ts): (a) auto-add is off for that
+  // contact type (`shouldAutoAddContactType` false), (b) the advert exceeded
+  // `getAutoAddMaxHops()`, (c) `allocateContactSlot()` returned NULL (contact
+  // store full). Only (a) is gated here, by `shouldAutoAdd`. (b) and (c) are
+  // INTENTIONAL residuals: each still schedules a walk that cannot produce the
+  // contact, and that is the trade we chose.
+  //
+  //   (b) max hops — DECLINED, not infeasible. `record.outPathLen` and
+  //       `hopsFromOutPathLen` are both in hand right here, so the comparison
+  //       against `radioMaxHops` is writable today; we decline it because it
+  //       would mean guessing the firmware's exact semantics against
+  //       `getAutoAddMaxHops()` (`>` vs `>=`, and which hop count it compares),
+  //       and the failure modes are asymmetric — a wrong gate SUPPRESSES a
+  //       legitimate re-sync, which is worse than an occasional redundant walk.
+  //       `radioMaxHops` defaults to 0 = no limit (src/model/types.ts), so this
+  //       residual only reaches consumers who deliberately set a hop limit.
+  //       Pinned as deliberate by the "max-hop refusal" case in
+  //       tests/integration/inbound/auto-add-resync.test.ts. Do not add the hop
+  //       gate here without firmware evidence of the exact comparison.
+  //   (c) contact store full — the radio reports that condition separately as
+  //       PUSH_CONTACTS_FULL (0x90, surfaced as the `contactsFull` event), which
+  //       is where a consumer should handle it.
   if (source === 'advert' && !onRadio && shouldAutoAdd(ctx, record.type)) {
     scheduleContactsResync(ctx);
   }

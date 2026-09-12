@@ -241,7 +241,11 @@ export const DEFAULT_DEVICE_IDENTITY: DeviceIdentity = {
 /** Auto-add behaviour (CMD_SET_AUTO_ADD_CONFIG / GET_AUTO_ADD_CONFIG). `mode`
  *  is an app-side convenience: "all" forces all four kind flags true on save;
  *  "selected" respects the per-kind booleans. The radio flag byte only carries
- *  the kinds + overwrite_oldest. */
+ *  the kinds + overwrite_oldest.
+ *
+ *  `mode` describes the app's own save UI, not the radio: the library never
+ *  assigns it and never derives auto-add behaviour from it. `manualAddContacts`
+ *  bit 0 below is the master switch. */
 export type AutoAddMode = 'all' | 'selected';
 export interface AutoAddConfig {
   mode: AutoAddMode;
