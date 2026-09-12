@@ -303,6 +303,15 @@ export class MeshCoreSession {
     this.rt.meshObs.clear();
     this.stopLivenessPoll();
     this.started = false;
+    // Tear the live connection down before forgetting the edge. Clearing
+    // `connected` alone would leave the session holding everything the connect
+    // branch set up — in-flight acks and typed awaiters, sync progress, the
+    // correlation buffers — with no edge left for a later 'disconnected' to
+    // match, so onTransportState's disconnect branch would never run and those
+    // awaiters would ride out their full timeouts. `session.stop()` followed by
+    // `port.close()` is the shipped teardown order in the examples, so this is
+    // the common path, not a corner.
+    if (this.connected) this.tearDownConnection('session stopped');
     // Forget the connected edge too. `connected` exists to make
     // onTransportState's connect branch run once per connect; a stopped
     // session has run it zero times since the stop, so latching it true is a
@@ -315,6 +324,25 @@ export class MeshCoreSession {
   /** Current transport connection state. */
   getTransportState(): TransportState {
     return this.transport.getState();
+  }
+
+  /** True when the transport is live AND this session is started — i.e. a
+   *  command issued now can actually reach the radio.
+   *
+   *  Deliberately NOT `this.connected`. That field is an edge latch whose only
+   *  job is keeping onTransportState's connect/disconnect branches to one run
+   *  apiece; it flips one microtask after `start()` on a transport that was
+   *  already connected (the deferred drive in start()). Gating commands on it
+   *  made `session.start()` followed by an awaited command IN THE SAME TICK
+   *  silently return false without ever writing the frame — and since start()
+   *  is synchronous and non-awaitable, that is the natural call shape. It hit
+   *  BLE hardest: createBleTransport initialises its state to 'connected' and
+   *  its watchState hook is optional, so a consumer that omits it gets no
+   *  announcement at all and start()'s microtask is the only thing that ever
+   *  sets the latch. This predicate asks the transport directly, which is what
+   *  v0.8.0's synchronous `connected = true` in start() effectively did. */
+  private isCommandable(): boolean {
+    return this.started && this.transport.getState() === 'connected';
   }
 
   private async writeFrame(frame: Buffer): Promise<void> {
@@ -571,48 +599,7 @@ export class MeshCoreSession {
       void this.handshake();
       this.startLivenessPoll();
     } else if (!this.connected && wasConnected) {
-      this.log.info('transport disconnected');
-      this.stopLivenessPoll();
-      // Abandon any in-flight drain round; a reconnect's handshake starts fresh.
-      resetDrain(this.ctx);
-      // Likewise for the two RX-side correlation buffers. Anything we sent
-      // before the link dropped will never be matched to a relay now, and
-      // leaving the entries behind lets them claim the first 0x88 frame heard
-      // after the reconnect.
-      this.rt.pendingChannelSends.clear();
-      this.rt.meshObs.clear();
-      channels.clearPresence(this.ctx);
-      this.updateSyncProgress({ ...DEFAULT_SYNC_PROGRESS });
-      // Resolve any in-flight acks as failures rather than leaving callers hung.
-      for (const p of this.pendingAcks.splice(0)) {
-        clearTimeout(p.timer);
-        p.resolve({ ok: false });
-      }
-      // Any DM still awaiting RESP_SENT will never get one — fail them so the
-      // UI doesn't leave 'sending' spinners forever.
-      directMessages.resetDmState(this.ctx, 'transport disconnected');
-      // Fail in-flight admin awaiters + drop login sessions.
-      repeaterAdmin.resetAdmin(this.ctx, 'transport disconnected');
-      // Fail any in-flight private-key export awaiter.
-      deviceAdmin.resetDeviceAdmin(this.ctx, 'transport disconnected');
-      // Fail any in-flight path-discovery awaiter.
-      pathDiagnostics.resetPathDiagnostics(this.ctx, 'transport disconnected');
-      // Fail any typed-reply awaiters (ctx.request with `expect`) so feature GETs
-      // reject promptly on disconnect instead of waiting out their timeout.
-      for (const queue of this.pendingTyped.values()) {
-        for (const entry of queue) {
-          clearTimeout(entry.timer);
-          entry.reject(new Error('transport disconnected'));
-        }
-      }
-      this.pendingTyped.clear();
-      // Resolve any in-flight contact-stream waiters (getContacts / handshake) so
-      // they return promptly on disconnect instead of riding out the watchdog.
-      this.resolveWaiter('contactsStartWaiter');
-      this.resolveWaiter('contactsDoneWaiter');
-      // A sync abandoned mid-iteration must not leave snapshot emits latched:
-      // flush the partial list, which is what the session actually holds.
-      closeContactsBulk(this.ctx);
+      this.tearDownConnection('transport disconnected');
     }
     // Broadcast last, deliberately: the branches above do the internal
     // bookkeeping (presence, liveness poll, drain/correlation buffers, sync
@@ -626,6 +613,58 @@ export class MeshCoreSession {
     // ports/events.ts documents this channel as un-de-duplicated.
     this.events.emit('transportState', state);
   };
+
+  /** Unwind everything the connect branch stood up: the liveness poll, the
+   *  drain round, the RX correlation buffers, presence, sync progress and every
+   *  in-flight awaiter. Called on a transport 'disconnected' edge and from
+   *  stop() — a stopped session is just as unable to receive the replies those
+   *  awaiters are blocked on, so leaving them queued only means callers wait out
+   *  a timeout for an answer that can no longer arrive. `reason` is the message
+   *  in-flight awaiters reject with. */
+  private tearDownConnection(reason: string): void {
+    this.log.info(reason);
+    this.stopLivenessPoll();
+    // Abandon any in-flight drain round; a reconnect's handshake starts fresh.
+    resetDrain(this.ctx);
+    // Likewise for the two RX-side correlation buffers. Anything we sent
+    // before the link dropped will never be matched to a relay now, and
+    // leaving the entries behind lets them claim the first 0x88 frame heard
+    // after the reconnect.
+    this.rt.pendingChannelSends.clear();
+    this.rt.meshObs.clear();
+    channels.clearPresence(this.ctx);
+    this.updateSyncProgress({ ...DEFAULT_SYNC_PROGRESS });
+    // Resolve any in-flight acks as failures rather than leaving callers hung.
+    for (const p of this.pendingAcks.splice(0)) {
+      clearTimeout(p.timer);
+      p.resolve({ ok: false });
+    }
+    // Any DM still awaiting RESP_SENT will never get one — fail them so the
+    // UI doesn't leave 'sending' spinners forever.
+    directMessages.resetDmState(this.ctx, reason);
+    // Fail in-flight admin awaiters + drop login sessions.
+    repeaterAdmin.resetAdmin(this.ctx, reason);
+    // Fail any in-flight private-key export awaiter.
+    deviceAdmin.resetDeviceAdmin(this.ctx, reason);
+    // Fail any in-flight path-discovery awaiter.
+    pathDiagnostics.resetPathDiagnostics(this.ctx, reason);
+    // Fail any typed-reply awaiters (ctx.request with `expect`) so feature GETs
+    // reject promptly on disconnect instead of waiting out their timeout.
+    for (const queue of this.pendingTyped.values()) {
+      for (const entry of queue) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error(reason));
+      }
+    }
+    this.pendingTyped.clear();
+    // Resolve any in-flight contact-stream waiters (getContacts / handshake) so
+    // they return promptly on disconnect instead of riding out the watchdog.
+    this.resolveWaiter('contactsStartWaiter');
+    this.resolveWaiter('contactsDoneWaiter');
+    // A sync abandoned mid-iteration must not leave snapshot emits latched:
+    // flush the partial list, which is what the session actually holds.
+    closeContactsBulk(this.ctx);
+  }
 
   /** Snapshot of channel keys currently present on the radio. Empty when the
    *  transport is disconnected. */
@@ -1195,7 +1234,7 @@ export class MeshCoreSession {
     txPowerDbm: number;
     repeatMode: boolean;
   }): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     const caps = this.state.getDeviceCapabilities();
     const paramsAck = this.awaitAck();
     try {
@@ -1243,7 +1282,7 @@ export class MeshCoreSession {
 
   /** Push the device's advertised display name. */
   async setAdvertName(name: string): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     const ack = this.awaitAck();
     try {
       await this.writeFrame(encodeSetAdvertName(name));
@@ -1268,7 +1307,7 @@ export class MeshCoreSession {
 
   /** Push device GPS coords used in self-adverts. */
   async setAdvertLatLon(lat: number, lon: number, alt?: number): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     const ack = this.awaitAck();
     try {
       await this.writeFrame(encodeSetAdvertLatLon(lat, lon, alt));
@@ -1304,7 +1343,7 @@ export class MeshCoreSession {
     sharePositionInAdvert: boolean,
     manualAddContacts?: number,
   ): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     const effectiveManualAdd = manualAddContacts ?? this.state.getAutoAddConfig().manualAddContacts;
     const ack = this.awaitAck();
     try {
@@ -1348,21 +1387,21 @@ export class MeshCoreSession {
   /** Push the auto-add flags byte. App-side `mode`/`maxHops`/`pullToRefresh`/
    *  `showPublicKeys` are stored locally and don't go on the wire. */
   async setAutoAddConfig(flags: AutoAddFlagsInput): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     return setAutoAddConfig(this.ctx, flags);
   }
 
   /** Ask the radio for its current auto-add flags. RESP_AUTOADD_CONFIG lands in
    *  the feature handler → updates state + emits. */
   async requestAutoAddConfig(): Promise<void> {
-    if (!this.connected) return;
+    if (!this.isCommandable()) return;
     await requestAutoAddConfig(this.ctx);
   }
 
   /** Toggle the GPS module / change interval via custom-var KV. The firmware
    *  ignores intervals outside [60, 86399]; we clamp client-side too. */
   async setGpsConfig(cfg: { enabled: boolean; intervalSec: number }): Promise<boolean> {
-    if (!this.connected) return false;
+    if (!this.isCommandable()) return false;
     const interval = Math.min(86399, Math.max(60, Math.floor(cfg.intervalSec)));
     const ack1 = this.awaitAck();
     try {
@@ -1392,7 +1431,7 @@ export class MeshCoreSession {
   /** Reboot the connected device. The link drops within a few hundred ms; the
    *  transport state machine will reflect that via its own state push. */
   async reboot(): Promise<{ ok: boolean; error?: string }> {
-    if (!this.connected) return { ok: false, error: 'no radio attached' };
+    if (!this.isCommandable()) return { ok: false, error: 'no radio attached' };
     try {
       await this.writeFrame(buildReboot());
       return { ok: true };
@@ -1403,7 +1442,7 @@ export class MeshCoreSession {
 
   /** Query battery + storage. Replies land in onPacket and update DeviceInfo. */
   async requestBattAndStorage(): Promise<void> {
-    if (!this.connected) return;
+    if (!this.isCommandable()) return;
     try {
       await this.writeFrame(encodeGetBattAndStorage());
     } catch (err) {
@@ -1413,7 +1452,7 @@ export class MeshCoreSession {
 
   /** Re-issue DEVICE_QUERY to refresh DeviceInfo + capabilities. */
   async requestDeviceInfo(): Promise<void> {
-    if (!this.connected) return;
+    if (!this.isCommandable()) return;
     try {
       await this.writeFrame(encodeDeviceQuery());
     } catch (err) {
@@ -1424,7 +1463,7 @@ export class MeshCoreSession {
   /** Query the firmware's custom-var store ("gps", "gps_interval", etc.).
    *  Empty key requests all known keys. Reply: RESP_CUSTOM_VARS. */
   async requestCustomVars(key = ''): Promise<void> {
-    if (!this.connected) return;
+    if (!this.isCommandable()) return;
     try {
       await this.writeFrame(encodeGetCustomVar(key));
     } catch (err) {
