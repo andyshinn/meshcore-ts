@@ -154,6 +154,13 @@ export class MeshCoreSession {
   readonly rt: SessionRuntime;
 
   private connected = false;
+  /** Last state broadcast on the event bus, so a transport that re-announces
+   *  the state it is already in does not deliver it to consumers twice.
+   *  SerialTransport does exactly that for a port that was already open:
+   *  start() sees getState() === 'connected' and broadcasts, then the
+   *  transport's deferred 'connected' announcement arrives a microtask
+   *  later. Only an actual change reaches subscribers. */
+  private lastBroadcastState: TransportState | null = null;
   /** Queue of awaiters for the next RESP_OK / RESP_ERR. The companion protocol
    *  has no correlation id, so we FIFO: any OK/ERR routes to the oldest
    *  pending awaiter. Only SET_CHANNEL currently uses this; if more writers
@@ -236,11 +243,17 @@ export class MeshCoreSession {
     this.purgeCorruptedChannels();
     channels.rebuildIndexes(this.ctx);
     // If the transport already happens to be connected at start (e.g. auto-
-    // reconnect on app launch), kick the handshake immediately.
-    if (this.transport.getState() === 'connected') {
-      this.connected = true;
-      void this.handshake();
-    }
+    // reconnect on app launch, or a serial port the caller opened before
+    // constructing the session), drive it through the same handler a live
+    // idle -> connected transition takes. Doing the work inline here instead
+    // meant this path silently skipped everything onTransportState's connect
+    // branch does beyond the handshake — the presence clear, the liveness
+    // poll, and the `transportState` broadcast consumers subscribe to. One
+    // choke point cannot drift out of sync with itself; the branch's
+    // wasConnected edge guard (this.connected is still false here) keeps the
+    // handshake and the poll to exactly one run.
+    const state = this.transport.getState();
+    if (state === 'connected') this.onTransportState(state);
   }
 
   /** Drop persisted channels whose name contains non-printable bytes — these
@@ -580,7 +593,12 @@ export class MeshCoreSession {
     // observe half-torn-down session state. Neither branch returns early, and
     // a transition that matches neither (e.g. idle → connecting, or an
     // error while already disconnected) still falls through to here, so every
-    // state change reaches subscribers exactly once.
+    // state change reaches subscribers exactly once — and only an actual
+    // change: re-announcing the state we last broadcast is not one, so it is
+    // dropped rather than firing a consumer's 'connected' handler a second
+    // time (see lastBroadcastState).
+    if (state === this.lastBroadcastState) return;
+    this.lastBroadcastState = state;
     this.events.emit('transportState', state);
   };
 
