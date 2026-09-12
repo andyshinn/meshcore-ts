@@ -9,6 +9,8 @@
 // enumeration, channel send/receive, and the inbox-pump (GET_NEXT_MSG / NO_MORE
 // / PUSH_MSG_WAITING). DM, repeater admin, telemetry, etc. land in later phases.
 
+import { invertCodes } from './codeNames';
+
 export const CMD = {
   APP_START: 0x01,
   SEND_TXT_MSG: 0x02,
@@ -335,6 +337,11 @@ export const PUSH = {
   LOGIN_SUCCESS: 0x85,
   LOGIN_FAIL: 0x86,
   STATUS_RESPONSE: 0x87,
+  // PUSH_LOG_RX_DATA [0x88][snr×4 i8][rssi i8][mesh packet bytes] — the raw
+  //   on-air packet exactly as received. Unlike RAW_DATA (0x84) there is no
+  //   0xff reserved byte, so the bytes after the header do follow the mesh
+  //   Packet wire format and can be fed straight to the packet parser.
+  LOG_RX_DATA: 0x88,
   TRACE_DATA: 0x89,
   // PUSH_NEW_ADVERT [0x8a][full 148B contact record] — despite the name, this
   //   means the radio REFUSED to store the advertising node. It is emitted only
@@ -386,13 +393,9 @@ export const ANON_REQ_TYPE = {
   BASIC: 0x03,
 } as const;
 
-const REQ_TYPE_NAMES: Record<number, string> = Object.fromEntries(
-  Object.entries(REQ_TYPE).map(([name, value]) => [value, name]),
-);
+const REQ_TYPE_NAMES: Record<number, string> = invertCodes(REQ_TYPE);
 
-const ANON_REQ_TYPE_NAMES: Record<number, string> = Object.fromEntries(
-  Object.entries(ANON_REQ_TYPE).map(([name, value]) => [value, name]),
-);
+const ANON_REQ_TYPE_NAMES: Record<number, string> = invertCodes(ANON_REQ_TYPE);
 
 // The REQ_TYPE byte lives in the encrypted body of a PAYLOAD_TYPE_REQ packet, so
 // these helpers can only name a byte the caller already holds (e.g. an outbound

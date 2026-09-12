@@ -40,6 +40,15 @@ describe('parseCompanionFrame', () => {
     expect(parsed.payloadHex).toBe('aabbcc');
   });
 
+  it('names 0x1a RESP_ALLOWED_REPEAT_FREQ (was an unnamed fallback before the tables were derived)', () => {
+    const frame = Buffer.from([0x1a, 0x00, 0x10, 0x1b, 0x33, 0x80, 0x1a, 0x1c, 0x33]);
+    const parsed = parseCompanionFrame(frame);
+    expect(parsed).not.toBeNull();
+    if (parsed?.kind !== 'companion') throw new Error('expected companion');
+    expect(parsed.code).toBe(0x1a);
+    expect(parsed.codeName).toBe('RESP_ALLOWED_REPEAT_FREQ');
+  });
+
   it('labels an unknown code with a frame 0x.. fallback name', () => {
     const frame = Buffer.from([0x3a, 0x99]);
     const parsed = parseCompanionFrame(frame);

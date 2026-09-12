@@ -1,6 +1,8 @@
 // Power-user wire-codec surface (the `Protocol` namespace).
 // Forward-looking — lets consumers build/parse companion frames directly.
 // NOTE: paths.ts is intentionally excluded (it is model-layer, not codec).
+// NOTE: codeNames.ts is intentionally excluded — `invertCodes` is an internal
+//   helper for building reverse lookup tables, not part of the public surface.
 export * from './protocol/advert';
 export * from './protocol/buffer';
 export * from './protocol/channelCrypto';
