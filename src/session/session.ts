@@ -154,13 +154,10 @@ export class MeshCoreSession {
   readonly rt: SessionRuntime;
 
   private connected = false;
-  /** Last state broadcast on the event bus, so a transport that re-announces
-   *  the state it is already in does not deliver it to consumers twice.
-   *  SerialTransport does exactly that for a port that was already open:
-   *  start() sees getState() === 'connected' and broadcasts, then the
-   *  transport's deferred 'connected' announcement arrives a microtask
-   *  later. Only an actual change reaches subscribers. */
-  private lastBroadcastState: TransportState | null = null;
+  /** True between start() and stop(). Only the deferred already-connected drive
+   *  in start() reads it, to avoid firing into a session the caller stopped in
+   *  the same tick it started. */
+  private started = false;
   /** Queue of awaiters for the next RESP_OK / RESP_ERR. The companion protocol
    *  has no correlation id, so we FIFO: any OK/ERR routes to the oldest
    *  pending awaiter. Only SET_CHANNEL currently uses this; if more writers
@@ -235,6 +232,7 @@ export class MeshCoreSession {
   }
 
   start(): void {
+    this.started = true;
     this.transport.onData((chunk) => this.ingest(chunk));
     this.transport.onStateChange((s) => this.onTransportState(s));
     // The repeaterAdmin feature owns the admin awaiter queues and registers the
@@ -250,10 +248,31 @@ export class MeshCoreSession {
     // branch does beyond the handshake — the presence clear, the liveness
     // poll, and the `transportState` broadcast consumers subscribe to. One
     // choke point cannot drift out of sync with itself; the branch's
-    // wasConnected edge guard (this.connected is still false here) keeps the
-    // handshake and the poll to exactly one run.
-    const state = this.transport.getState();
-    if (state === 'connected') this.onTransportState(state);
+    // wasConnected edge guard keeps the handshake and the poll to one run.
+    //
+    // Deferred by a microtask rather than run inline, which matters twice:
+    //
+    //  - Consumers routinely subscribe AFTER start() in the same tick. A
+    //    broadcast from inside start() reaches nobody; one from a microtask
+    //    reaches every handler attached anywhere in that tick.
+    //  - A transport that announces an already-open port itself queues that
+    //    announcement when it is CONSTRUCTED (SerialTransport does, see
+    //    transports/serialTransport.ts), so it runs ahead of this one, sets
+    //    `connected` on the way through, and leaves this a no-op. Exactly one
+    //    'connected' either way — no de-duplication of the event bus needed,
+    //    so genuinely repeated states from a transport still reach consumers.
+    //
+    // A transport that never announces (any Transport already in 'connected'
+    // when it is handed over) leaves `connected` false, and this drives it.
+    if (this.transport.getState() === 'connected') {
+      queueMicrotask(() => {
+        // Stopped since, already driven by the transport's own announcement,
+        // or no longer connected at all: nothing left for us to do.
+        if (!this.started || this.connected) return;
+        if (this.transport.getState() !== 'connected') return;
+        this.onTransportState('connected');
+      });
+    }
   }
 
   /** Drop persisted channels whose name contains non-printable bytes — these
@@ -283,6 +302,14 @@ export class MeshCoreSession {
     this.rt.pendingChannelSends.clear();
     this.rt.meshObs.clear();
     this.stopLivenessPoll();
+    this.started = false;
+    // Forget the connected edge too. `connected` exists to make
+    // onTransportState's connect branch run once per connect; a stopped
+    // session has run it zero times since the stop, so latching it true is a
+    // lie that makes stop() -> start() on a still-connected transport a silent
+    // no-op — no handshake, no liveness poll, no 'connected' broadcast.
+    // Clearing it lets the next start() re-drive the whole connect branch.
+    this.connected = false;
   }
 
   /** Current transport connection state. */
@@ -593,12 +620,10 @@ export class MeshCoreSession {
     // observe half-torn-down session state. Neither branch returns early, and
     // a transition that matches neither (e.g. idle → connecting, or an
     // error while already disconnected) still falls through to here, so every
-    // state change reaches subscribers exactly once — and only an actual
-    // change: re-announcing the state we last broadcast is not one, so it is
-    // dropped rather than firing a consumer's 'connected' handler a second
-    // time (see lastBroadcastState).
-    if (state === this.lastBroadcastState) return;
-    this.lastBroadcastState = state;
+    // state change reaches subscribers exactly once. Nothing here filters
+    // repeats: a transport that reports the same state twice (SerialTransport
+    // calls setState('error') on every port 'error' event) means it twice, and
+    // ports/events.ts documents this channel as un-de-duplicated.
     this.events.emit('transportState', state);
   };
 
