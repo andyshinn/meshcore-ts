@@ -28,11 +28,18 @@ export function encodeGetAllowedRepeatFreq(): Buffer {
 }
 
 // RESP_ALLOWED_REPEAT_FREQ: [0x1a] then N×[lower_freq u32 LE][upper_freq u32 LE]
-// (firmware: MyMesh.cpp:1967-1975). Trailing partial bytes are ignored.
+// (firmware: MyMesh.cpp, CMD_GET_ALLOWED_REPEAT_FREQ handler). The firmware writes
+// exactly one pair per configured range and sizes the frame to match, so it does not
+// pad — but meshcore_py treats a pair with either bound zero as an end-of-list
+// sentinel, so we stop there too rather than surfacing 0 kHz "ranges" from a padded
+// or over-long frame. Trailing partial bytes are ignored.
 export function decodeAllowedRepeatFreq(frame: Buffer): RepeatFreqRange[] {
   const out: RepeatFreqRange[] = [];
   for (let i = 1; i + 8 <= frame.length; i += 8) {
-    out.push({ lowerKhz: frame.readUInt32LE(i), upperKhz: frame.readUInt32LE(i + 4) });
+    const lowerKhz = frame.readUInt32LE(i);
+    const upperKhz = frame.readUInt32LE(i + 4);
+    if (lowerKhz === 0 || upperKhz === 0) break; // end-of-list sentinel
+    out.push({ lowerKhz, upperKhz });
   }
   return out;
 }
