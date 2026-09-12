@@ -15,7 +15,13 @@ export interface ContactRecord {
   lastmod: number;
 }
 
-/** Where an ingested contact was heard: `'sync'` (RESP_CONTACT during the
- *  GET_CONTACTS handshake — always on-radio) or `'advert'` (live PUSH_NEW_ADVERT
- *  — on-radio only if already in the store). */
+/** Where an ingested contact was heard: `'sync'` (the radio listing what it
+ *  stores — a RESP_CONTACT during a GET_CONTACTS enumeration, or a
+ *  PUSH_PATH_UPDATED re-fetch) or `'advert'` (we heard the node transmit — a
+ *  PUSH_ADVERT (0x80) re-fetch, or a PUSH_NEW_ADVERT (0x8a), which means the
+ *  radio refused to store it).
+ *
+ *  `'advert'` says nothing about contact-store membership in either direction:
+ *  0x80 means the node IS stored (including one auto-added microseconds ago),
+ *  0x8a means it is NOT. Read `DiscoveredContact.onRadio` for that. */
 export type ContactSource = 'sync' | 'advert';

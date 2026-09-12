@@ -89,9 +89,14 @@ export const CMD = {
   REBOOT: 0x13,
   // CMD_GET_BATT_AND_STORAGE: [0x14]. Replies RESP_BATT_AND_STORAGE.
   GET_BATT_AND_STORAGE: 0x14,
-  // CMD_SET_OTHER_PARAMS: [0x26][reserved u8][telemetry_flags u8]
+  // CMD_SET_OTHER_PARAMS: [0x26][manual_add_contacts u8][telemetry_flags u8]
   //   [advert_loc_policy u8][multi_acks u8]. Replies RESP_OK.
   //   telemetry_flags = (env_mode << 4) | (loc_mode << 2) | base_mode (each 0..2)
+  //   Byte 1 is NOT reserved: `MyMesh::handleCmdFrame` (MyMesh.cpp:1444) does
+  //   `_prefs.manual_add_contacts = cmd_frame[1];` as the first statement of the
+  //   handler, before every length guard, so every write to this command
+  //   overwrites the radio's auto-add pref. Bit 0 clear = auto-add everything
+  //   (and `autoadd_config` is ignored); bit 0 set = honour the per-kind flags.
   SET_OTHER_PARAMS: 0x26,
   // CMD_GET_CUSTOM_VAR: [0x28][key utf8]. Replies RESP_CUSTOM_VARS with the
   //   key:value text the firmware tracks (gps, gps_interval, etc.).
@@ -305,9 +310,19 @@ export const ADV_TYPE = {
 } as const;
 
 export const PUSH = {
-  // PUSH_ADVERT [0x80][pubkey 32B] (33B) — a KNOWN contact re-advertised. The
-  //   firmware sends this (not the 148B PUSH_NEW_ADVERT) when the advertising
-  //   node is already in the contact store; we touch the contact's last-seen.
+  // PUSH_ADVERT [0x80][pubkey 32B] (33B) — the advertising node IS in the radio's
+  //   contact store. Crucially that INCLUDES the very first advert from a
+  //   previously unknown node, emitted microseconds after the radio auto-added
+  //   it: 0x80 is the ONLY frame that ever announces a newly auto-added contact.
+  //
+  //   `BaseChatMesh::onAdvertRecv` declares `bool is_new = false` and never
+  //   assigns it true; the auto-add success path falls through to
+  //   `onDiscoveredContact(*from, is_new, ...)` still carrying false, and
+  //   `MyMesh::onDiscoveredContact` maps false -> 0x80. The only `true` values
+  //   are three literals on three refusal early-returns (see NEW_ADVERT).
+  //
+  //   So we cannot assume we already know the pubkey: we touch last-seen when we
+  //   do, and always re-fetch the full record via CMD_GET_CONTACT_BY_KEY.
   ADVERT: 0x80,
   // PUSH_PATH_UPDATED [0x81][pubkey 32B] (33B) — the radio updated its routing
   //   path for a contact (no path bytes inline). We touch the contact's last-seen.
@@ -321,6 +336,14 @@ export const PUSH = {
   LOGIN_FAIL: 0x86,
   STATUS_RESPONSE: 0x87,
   TRACE_DATA: 0x89,
+  // PUSH_NEW_ADVERT [0x8a][full 148B contact record] — despite the name, this
+  //   means the radio REFUSED to store the advertising node. It is emitted only
+  //   from the three refusal early-returns in `BaseChatMesh::onAdvertRecv`, each
+  //   passing a literal `true` for `is_new`: auto-add is off for that contact
+  //   type (`shouldAutoAddContactType` false), the advert exceeded
+  //   `getAutoAddMaxHops()`, or `allocateContactSlot()` returned NULL (store
+  //   full). A node announced by 0x8a is therefore NOT on the radio.
+  //   Newly auto-added contacts arrive as 0x80 instead — see ADVERT.
   NEW_ADVERT: 0x8a,
   TELEMETRY_RESPONSE: 0x8b,
   // PUSH_BINARY_RESPONSE delivers a tag-matched binary reply to a prior

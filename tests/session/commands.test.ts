@@ -33,6 +33,16 @@ function logRxGrpTxtFrame(channelHash: number, cipherHex = 'deadbeef'): Uint8Arr
   return Uint8Array.from(frame);
 }
 
+/** Build a minimal 58-byte RESP_SELF_INFO (0x05) carrying only the
+ *  `manual_add_contacts` byte at offset 47 — the radio's report of
+ *  `_prefs.manual_add_contacts`, and the only field these tests read. */
+function selfInfoFrame(manualAddContacts: number): Uint8Array {
+  const frame = Buffer.alloc(58);
+  frame[0] = 0x05; // RESP_SELF_INFO
+  frame[47] = manualAddContacts;
+  return Uint8Array.from(frame);
+}
+
 describe('MeshCoreSession command surface', () => {
   let transport: LoopbackTransport;
   let session: MeshCoreSession;
@@ -232,6 +242,54 @@ describe('MeshCoreSession command surface', () => {
       transport.receive(logRxGrpTxtFrame(channelHash));
 
       expect(heard).toEqual([]);
+    });
+  });
+
+  describe('setOtherParams', () => {
+    // CMD_SET_OTHER_PARAMS is [0x26][manual_add_contacts][telemetry flags]
+    //   [advert_loc_policy][multi_acks]. Byte 1 is NOT reserved — the firmware
+    //   assigns _prefs.manual_add_contacts from it before any length guard, so
+    //   every telemetry save rewrites the radio's auto-add pref.
+    const policy = { base: 2, loc: 1, env: 0, multiAcks: 2 } as const;
+
+    /** Pick the SET_OTHER_PARAMS write out of the log — the handshake keeps
+     *  writing in the background, so a fixed index isn't dependable. */
+    const sentOtherParams = (): Buffer | undefined => transport.sent.map((f) => Buffer.from(f)).find((f) => f[0] === 0x26);
+
+    it('preserves the manual-add byte the radio reported when the caller omits it', async () => {
+      // RESP_SELF_INFO byte 47 is the only place the app learns the radio's
+      // real pref; saving telemetry must not silently turn auto-add back on.
+      transport.receive(selfInfoFrame(1));
+      expect(session.state.getAutoAddConfig().manualAddContacts).toBe(1);
+
+      const promise = session.setOtherParams(policy, true);
+      await vi.waitFor(() => expect(sentOtherParams()).toBeDefined());
+      const frame = sentOtherParams() as Buffer;
+      expect(frame[1]).toBe(1); // the radio's value, not a hardcoded 0
+      expect(frame[2]).toBe((0 << 4) | (1 << 2) | 2); // env/loc/base
+      expect(frame[3]).toBe(1); // advert_loc_policy — share position
+      expect(frame[4]).toBe(2); // multi_acks
+
+      transport.receive(RESP_OK);
+      await expect(promise).resolves.toBe(true);
+      expect(session.state.getAutoAddConfig().manualAddContacts).toBe(1);
+    });
+
+    it('writes an explicitly passed manual-add byte in preference to the stored one', async () => {
+      transport.receive(selfInfoFrame(1));
+      const seen: number[] = [];
+      session.events.on('autoAddConfig', (c) => seen.push(c.manualAddContacts));
+
+      const promise = session.setOtherParams(policy, false, 0);
+      await vi.waitFor(() => expect(sentOtherParams()).toBeDefined());
+      expect((sentOtherParams() as Buffer)[1]).toBe(0);
+
+      transport.receive(RESP_OK);
+      await expect(promise).resolves.toBe(true);
+      // The radio now holds 0, so the mirrored pref follows it and a later
+      // omitted argument preserves 0 instead of resurrecting the stale 1.
+      expect(session.state.getAutoAddConfig().manualAddContacts).toBe(0);
+      expect(seen).toEqual([0]);
     });
   });
 });

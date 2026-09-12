@@ -255,6 +255,22 @@ export interface AutoAddConfig {
   maxHops: number | null;
   /** Radio-side firmware autoadd_max_hops; 0 = no limit. Distinct from the app-side `maxHops` advert filter. */
   radioMaxHops: number;
+  /** Firmware `_prefs.manual_add_contacts`, decoded from `RESP_SELF_INFO` byte 47
+   *  and written back as byte 1 of `CMD_SET_OTHER_PARAMS`.
+   *
+   *  Bit 0 CLEAR = auto-add every advert and ignore `autoadd_config` entirely;
+   *  bit 0 SET = honour the per-kind `CMD_SET_AUTO_ADD_CONFIG` flags. See
+   *  `MyMesh::shouldAutoAddContactType`, which returns `true` before ever
+   *  consulting `_prefs.autoadd_config` when the bit is clear — so with bit 0
+   *  clear the `chat`/`repeater`/`room`/`sensor` flags above are inert on the
+   *  radio.
+   *
+   *  Corresponds to `mode` (`'all'` <-> bit 0 clear, `'selected'` <-> bit 0 set),
+   *  but the two are NOT kept in sync: `mode` is app-side state the library never
+   *  writes, so it stays at its default while this byte tracks the radio. Treat
+   *  this byte as the source of truth and round-trip it — leave `setOtherParams`'s
+   *  `manualAddContacts` argument omitted unless deliberately changing auto-add. */
+  manualAddContacts: number;
 }
 export const DEFAULT_AUTO_ADD_CONFIG: AutoAddConfig = {
   mode: 'all',
@@ -265,6 +281,7 @@ export const DEFAULT_AUTO_ADD_CONFIG: AutoAddConfig = {
   overwriteOldest: true,
   maxHops: null,
   radioMaxHops: 0,
+  manualAddContacts: 0,
 };
 
 /** Telemetry/messaging knobs from CMD_SET_OTHER_PARAMS. Each telemetry mode is

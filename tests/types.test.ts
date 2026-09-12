@@ -64,6 +64,7 @@ describe('DEFAULT_AUTO_ADD_CONFIG', () => {
       overwriteOldest: true,
       maxHops: null,
       radioMaxHops: 0,
+      manualAddContacts: 0,
     });
   });
 
@@ -72,6 +73,7 @@ describe('DEFAULT_AUTO_ADD_CONFIG', () => {
     expect(DEFAULT_AUTO_ADD_CONFIG).not.toHaveProperty('showPublicKeys');
     expect(Object.keys(DEFAULT_AUTO_ADD_CONFIG).sort()).toEqual([
       'chat',
+      'manualAddContacts',
       'maxHops',
       'mode',
       'overwriteOldest',

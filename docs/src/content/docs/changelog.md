@@ -7,6 +7,180 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.8.0
+
+_The contact list finally goes live: a newly auto-added contact no longer waits
+for a reconnect._
+
+### Fixed
+
+- **A node the radio had just auto-added never reached the contact list.** The
+  firmware announces it with `PUSH_ADVERT` (0x80) — and this library dropped
+  exactly that case on the floor, because it looked the pubkey up in its own map
+  first and returned when it found nothing. The contact stayed invisible until
+  the next full `CMD_GET_CONTACTS` sync, which in practice means a reconnect.
+  That was the entirety of "the contact list is not live".
+
+  The two push codes mean the opposite of what their names suggest, and this is
+  worth writing down permanently. `BaseChatMesh::onAdvertRecv`
+  (`src/helpers/BaseChatMesh.cpp`) declares
+
+  ```cpp
+  bool is_new = false; // true = not in contacts[], false = exists in contacts[]
+  ```
+
+  and **never assigns it `true` anywhere in the function** — `grep -n is_new
+  BaseChatMesh.cpp` returns exactly two hits, the declaration and the final
+  call. The only `true` values are three *literals* passed on three *early
+  return* paths, and every one of those is a **refusal**: auto-add is off for
+  that contact type, the advert exceeded `getAutoAddMaxHops()`, or
+  `allocateContactSlot()` returned `NULL`. The success path — including the very
+  first time a node is heard and auto-added — falls straight through to
+
+  ```cpp
+  onDiscoveredContact(*from, is_new, packet->path_len, packet->path);  // still false
+  ```
+
+  and `MyMesh::onDiscoveredContact` (`examples/companion_radio/MyMesh.cpp`) maps
+  `false` to `PUSH_CODE_ADVERT` and `true` to `PUSH_CODE_NEW_ADVERT`. So on the
+  wire, `0x8a` **`PUSH_NEW_ADVERT`** (148 B) means *"here is a node I refused to
+  store"* — it is **not** on the radio — and `0x80` **`PUSH_ADVERT`** (33 B)
+  means *"a node that is in my contact store advertised"*, **including
+  microseconds after the radio itself auto-added it**. `0x80` is the only frame
+  that ever announces a newly auto-added contact. There is no other.
+
+  `PUSH_ADVERT` now always schedules the debounced
+  `CMD_GET_CONTACT_BY_KEY` re-fetch, for any pubkey it decodes, rather than only
+  for contacts already in the map. The `lastSeenMs` touch still requires an
+  existing contact — there is nothing to merge into otherwise. The refresh
+  remains fire-and-forget and de-duplicated per pubkey, so a burst of adverts
+  still produces a single request; when the radio genuinely does not hold the
+  contact the lookup resolves `null` and the cost is one wasted 33-byte request.
+
+- **A contact recovered that way would still not have appeared, because
+  `onRadio` was inferred from the ingest source.** `ingestContact` derived
+  `onRadio` as `source === 'sync' ? true : alreadyOnRadio`, and only an
+  `onRadio` record reaches `upsertOnRadioContact` — the call that actually puts
+  the contact into state and fires `contactUpserted` and the `contacts`
+  snapshot. For the brand-new contact the fix above exists to rescue,
+  `alreadyOnRadio` is `false` by definition, so simply re-ingesting as
+  `'advert'` would have changed nothing observable.
+
+  "Is it on the radio" and "did we hear it live" are independent facts, and the
+  old code conflated them. A record returned by `CMD_GET_CONTACT_BY_KEY` is on
+  the radio by construction — the radio answered for it — so the refresh path
+  now asserts `onRadio: true` explicitly, whatever the source. A genuinely
+  first-seen contact consequently emits `contactDiscovered`, records a real
+  first-heard timestamp in the discovered pool, and lands in the contact list
+  within the 50 ms debounce.
+
+- **`lastSeenMs` could jump backwards — sometimes by years — moments after a
+  correct value was shown.** `upsertOnRadioContact` set it from
+  `record.lastAdvertUnix`, which is `ContactInfo.last_advert_timestamp`: a value
+  the firmware copies straight off the advert packet. It is the **advertising
+  node's own RTC**, not ours and not the radio's, and mesh nodes routinely run
+  with unset or badly-skewed clocks. The `PUSH_ADVERT` handler would stamp an
+  honest `Date.now()`, and ~50 ms later the debounced refresh re-ingested the
+  same contact and overwrote it with the advertiser's claim.
+
+  `lastSeenMs` is now monotonic. The advertiser's timestamp is first clamped to
+  the present — otherwise a node whose clock reads 2031 pins the field to a
+  future value that the monotonic guard then makes permanent — and then
+  `Math.max`'d against the value already held. `undefined` is still produced
+  when nothing is known, so an unknown last-seen never renders as the epoch.
+
+- **Every telemetry or share-position save silently forced the radio into
+  auto-add-everything, and made `CMD_SET_AUTO_ADD_CONFIG` a no-op.**
+  `encodeSetOtherParams` wrote a hardcoded `0` into byte 1 of
+  `CMD_SET_OTHER_PARAMS`, commented `// reserved`. Byte 1 is not reserved. It is
+  the first thing `MyMesh::handleCmdFrame` assigns, before every length guard:
+
+  ```cpp
+  } else if (cmd_frame[0] == CMD_SET_OTHER_PARAMS) {
+      _prefs.manual_add_contacts = cmd_frame[1];
+      if (len >= 3) { ...telemetry... }
+      savePrefs();
+  ```
+
+  and that pref gates auto-add entirely:
+
+  ```cpp
+  bool MyMesh::shouldAutoAddContactType(uint8_t contact_type) const {
+    if ((_prefs.manual_add_contacts & 1) == 0) {
+      return true;                     // auto-add EVERYTHING; autoadd_config ignored
+    }
+    ... return (_prefs.autoadd_config & type_bit) != 0;
+  }
+  ```
+
+  Two consequences compounded. Writing bit 0 clear put the radio into
+  auto-add-everything, so every advert from an unknown node was auto-added — and
+  therefore arrived as a `0x80` frame, precisely the frame this library dropped.
+  The two defects were the same bug seen from opposite ends. And because
+  `shouldAutoAddContactType` returns `true` before ever consulting
+  `_prefs.autoadd_config`, this library's entire `setAutoAddConfig` surface —
+  the per-kind chat/repeater/room/sensor flags — was writing a byte the firmware
+  then refused to read. Downstream auto-add settings UIs were decorative.
+
+  `manual_add_contacts` is now preserved rather than zeroed. It was already
+  decoded from `RESP_SELF_INFO` byte 47 and then dropped on the floor; it is now
+  folded into `AutoAddConfig` and written back on every successful
+  `setOtherParams`.
+
+### Changed
+
+- **`MeshCoreSession.setOtherParams` takes an optional third argument,
+  `manualAddContacts?: number`.** Omit it — as every existing caller does — and
+  the value the radio last reported is preserved. Existing callers saving
+  telemetry policy or share-position get the correct behaviour on upgrade with
+  no source change; that is deliberate, since neither of those operations is
+  about auto-add and forcing them to supply an unrelated byte is how the
+  original bug arrived. Pass it explicitly only to change auto-add behaviour:
+  bit 0 clear = auto-add everything and ignore `autoadd_config`, bit 0 set =
+  honour the per-kind flags.
+
+- **`OtherParamsInput.manualAddContacts` is required** on the internal
+  `encodeSetOtherParams`. The encoder is not re-exported, so this is not a
+  public break; it exists to make the compiler find any call site that would
+  otherwise silently reintroduce the zero.
+
+- `PUSH_ADVERT` re-fetches now carry the `'advert'` source through to
+  `contactObserved` and the discovered pool, where they previously reported
+  `'sync'`. `PUSH_PATH_UPDATED` still reports `'sync'` — a path update is not an
+  advert and must not mark a contact heard-live. Where a `PUSH_ADVERT` lands
+  inside an already-running `PUSH_PATH_UPDATED` debounce, the pending refresh is
+  upgraded to `'advert'` rather than swallowing the flag.
+
+### Added
+
+- **`AutoAddConfig.manualAddContacts: number`** — the firmware's
+  `_prefs.manual_add_contacts`, decoded from `RESP_SELF_INFO` byte 47 and
+  emitted on the existing `autoAddConfig` event, so consumers can read and
+  round-trip it. It corresponds to the existing `AutoAddConfig.mode` — `'all'` ↔
+  bit 0 clear, `'selected'` ↔ bit 0 set — so `mode`, documented as an app-side
+  convenience, turns out to describe a real firmware bit. The two are **not**
+  kept in sync by the library: nothing here ever assigns `mode`, so it sits at
+  its default while `manualAddContacts` tracks the radio. Treat the byte as the
+  source of truth; a consumer with an auto-add settings panel should drive the
+  byte and derive its `mode` display from it, not the reverse.
+
+### For consumers
+
+- **`heardLive`-style checks on `source === 'advert'` keep working and become
+  correct with no code change.** `ContactSource` is unchanged (`'sync' |
+  'advert'`); widening it to add a `'re-advert'` member was considered and
+  rejected, because every downstream `source === 'advert'` check would have
+  silently stopped meaning "heard live" — a behavioural regression that compiles
+  clean. A consumer doing
+  `discoveredStore.upsert(record, { heardLive: source === 'advert' })` gets
+  accurate first-heard data from a version bump alone.
+- **One type-level caveat:** `AutoAddConfig` gains a *required* member, which
+  breaks external code that builds one as an object literal. Spread an existing
+  config, or add `manualAddContacts` to the literal. Code that only reads
+  `AutoAddConfig` is unaffected.
+- `ingestContact` and `scheduleContactRefresh` changed signatures but are
+  internal — neither is re-exported from `src/index.ts` or `src/features.ts`.
+
 ## 0.7.2
 
 _Reverts 0.7.1: the V3 message header byte read as RSSI is a firmware reserved
