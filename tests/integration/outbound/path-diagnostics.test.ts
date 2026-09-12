@@ -123,6 +123,25 @@ describe('outbound path diagnostics', () => {
     expect(await p).toEqual({ recvTimestampUnix: 1000, hops: 2, pathHex: 'aabb' });
   });
 
+  it('getAdvertPath marks a 0xFF reply flood, keeping it apart from a 0-hop direct one', async () => {
+    // The downstream case: a caller only ever sees the decoded struct, so a
+    // radio with no cached path (0xFF) must not look like "heard direct" (0x00).
+    const advertPathReply = (pathLenByte: number): Buffer => Buffer.from([0x16, 0xe8, 0x03, 0x00, 0x00, pathLenByte]); // RESP_ADVERT_PATH, ts 1000
+
+    const { session, transport } = makeSession();
+    seedContact(session);
+
+    const flooded = session.getAdvertPath(`c:${PK}`);
+    await flush();
+    deliver(transport, advertPathReply(0xff));
+    expect(await flooded).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '', flood: true });
+
+    const direct = session.getAdvertPath(`c:${PK}`);
+    await flush();
+    deliver(transport, advertPathReply(0x00));
+    expect(await direct).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
+  });
+
   it('getAdvertPath returns null on RESP_ERR (no cached path)', async () => {
     const { session, transport } = makeSession();
     seedContact(session);

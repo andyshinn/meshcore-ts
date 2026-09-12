@@ -33,12 +33,19 @@ const PATH_DISCOVERY_TIMEOUT_MS = 30_000;
 // path bytes and make the decoders below reject the whole frame, so both
 // helpers special-case it to zero — matching how decodeContact and the session
 // contact rows already collapse a 0xFF out_path_len to an empty path.
+//
+// Zero is also a legitimate hop count, though, so the decoders additionally
+// report the sentinel through a flag (see AdvertPath.flood) rather than leaving
+// callers to guess which kind of empty path they were handed.
 const PATH_LEN_FLOOD = 0xff;
+function isFloodPathLen(pathLenByte: number): boolean {
+  return pathLenByte === PATH_LEN_FLOOD;
+}
 function pathHops(pathLenByte: number): number {
-  return pathLenByte === PATH_LEN_FLOOD ? 0 : pathLenByte & 0x3f;
+  return isFloodPathLen(pathLenByte) ? 0 : pathLenByte & 0x3f;
 }
 function pathByteLen(pathLenByte: number): number {
-  if (pathLenByte === PATH_LEN_FLOOD) return 0;
+  if (isFloodPathLen(pathLenByte)) return 0;
   const hashSize = (pathLenByte >> 6) + 1;
   return pathHops(pathLenByte) * hashSize;
 }
@@ -47,23 +54,46 @@ function pathByteLen(pathLenByte: number): number {
 
 /** The device's cached advert path for a contact.
  *
- *  A flood / no-path result (path_len 0xFF) is reported as `hops: 0` with an
- *  empty `pathHex` rather than via an extra `flood` flag: it keeps this
- *  interface unchanged for existing consumers, and "no path to walk" is already
- *  how the rest of the library surfaces a 0xFF path length. */
+ *  `flood` separates the two very different results that both arrive as an
+ *  empty path. path_len 0x00 is a real reception with no relays ("heard
+ *  direct"); path_len 0xFF is the flood / no-path sentinel, meaning the device
+ *  holds no path for this contact at all. The sentinel carries no path bytes,
+ *  so both collapse to `hops: 0` / `pathHex: ''` — and unlike a contact row,
+ *  which keeps its raw `outPathLen`, a `getAdvertPath` caller only ever sees
+ *  this struct, with no way back to the wire byte.
+ *
+ *  0.8.0 deliberately shipped without the flag, on the grounds that "no path to
+ *  walk" was already how the library surfaced a 0xFF path length elsewhere.
+ *  That reasoning does not survive contact with a consumer that persists an
+ *  inbound-hops column: it recorded "heard direct, 0 hops" for nodes it had no
+ *  path information about, and the wrong reading outlived the query. Hence the
+ *  flag — added as an optional property that is only ever `true`, so every
+ *  existing field keeps its type and existing consumers keep compiling. The
+ *  change is additive, not breaking. */
 export interface AdvertPath {
   recvTimestampUnix: number;
   hops: number;
   pathHex: string;
+  /** Present (always `true`) only when path_len was the 0xFF sentinel: `hops: 0`
+   *  then means "no cached path / would flood", not "direct". */
+  flood?: true;
 }
 
-/** The round-trip path discovered by a path-discovery request. */
+/** The round-trip path discovered by a path-discovery request.
+ *
+ *  Each leg has its own path_len byte and so its own flood flag, set on the same
+ *  terms as `AdvertPath.flood`. The two are independent: the reply can arrive
+ *  over a known path while the outbound leg is still unknown, or vice versa. */
 export interface DiscoveredPath {
   pubKeyPrefixHex: string;
   outHops: number;
   outPathHex: string;
+  /** Present (always `true`) only when out_path_len was the 0xFF sentinel. */
+  outFlood?: true;
   inHops: number;
   inPathHex: string;
+  /** Present (always `true`) only when in_path_len was the 0xFF sentinel. */
+  inFlood?: true;
 }
 
 // ---- Encoders ----------------------------------------------------------
@@ -91,7 +121,8 @@ export function encodeGetAdvertPath(destPublicKeyHex: string): Buffer {
 
 // RESP_ADVERT_PATH: [0x16][recv_timestamp u32 LE][path_len u8][path bytes].
 // path_len 0xFF (flood / no path) carries no path bytes, so the frame is a
-// valid 6-byte response and decodes to zero hops with an empty path.
+// valid 6-byte response; it decodes to zero hops with an empty path and
+// `flood: true` to mark that empty path as "unknown" rather than "direct".
 export function decodeAdvertPath(frame: Buffer): AdvertPath | null {
   if (frame.length < 6) return null;
   const pathLenByte = frame[5];
@@ -101,13 +132,15 @@ export function decodeAdvertPath(frame: Buffer): AdvertPath | null {
     recvTimestampUnix: frame.readUInt32LE(1),
     hops: pathHops(pathLenByte),
     pathHex: frame.subarray(6, 6 + byteLen).toString('hex'),
+    ...(isFloodPathLen(pathLenByte) ? ({ flood: true } as const) : {}),
   };
 }
 
 // PUSH_PATH_DISCOVERY_RESPONSE:
 //   [0x8d][reserved u8][6B prefix][out_path_len u8][out_path][in_path_len u8][in_path]
 // Either length byte can be the 0xFF flood sentinel (that leg has no path), in
-// which case no bytes follow it and the leg decodes to zero hops / empty path.
+// which case no bytes follow it and the leg decodes to zero hops / empty path
+// plus its own flood flag — the legs are flagged independently.
 export function decodePathDiscoveryResponse(frame: Buffer): DiscoveredPath | null {
   if (frame.length < 9) return null; // code + reserved + 6B prefix + out_path_len
   const pubKeyPrefixHex = frame.subarray(2, 8).toString('hex');
@@ -127,8 +160,10 @@ export function decodePathDiscoveryResponse(frame: Buffer): DiscoveredPath | nul
     pubKeyPrefixHex,
     outHops: pathHops(outLenByte),
     outPathHex,
+    ...(isFloodPathLen(outLenByte) ? ({ outFlood: true } as const) : {}),
     inHops: pathHops(inLenByte),
     inPathHex,
+    ...(isFloodPathLen(inLenByte) ? ({ inFlood: true } as const) : {}),
   };
 }
 

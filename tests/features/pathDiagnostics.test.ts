@@ -51,11 +51,28 @@ describe('decodeAdvertPath', () => {
     expect(decodeAdvertPath(frame)).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
   });
 
-  it('decodes the 0xFF flood sentinel as zero hops / no path', () => {
+  it('decodes the 0xFF flood sentinel as zero hops / no path, flagged flood', () => {
     // path_len 0xFF is not a compound length: no path bytes follow, so the
-    // 6-byte frame is complete and must not be rejected as a short path.
+    // 6-byte frame is complete and must not be rejected as a short path. The
+    // empty path it yields means "no cached path", hence the flag.
     const frame = Buffer.from([0x16, 0xe8, 0x03, 0x00, 0x00, 0xff]); // ts 1000, flood
-    expect(decodeAdvertPath(frame)).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
+    expect(decodeAdvertPath(frame)).toEqual({
+      recvTimestampUnix: 1000,
+      hops: 0,
+      pathHex: '',
+      flood: true,
+    });
+  });
+
+  it('tells the flood sentinel apart from a real 0-hop direct reception', () => {
+    // Both decode to hops: 0 with an empty path; only `flood` separates "heard
+    // direct, no relays" (0x00) from "no path cached, would flood" (0xFF).
+    const direct = decodeAdvertPath(Buffer.from([0x16, 0xe8, 0x03, 0x00, 0x00, 0x00]));
+    const flood = decodeAdvertPath(Buffer.from([0x16, 0xe8, 0x03, 0x00, 0x00, 0xff]));
+    expect(direct).toEqual({ recvTimestampUnix: 1000, hops: 0, pathHex: '' });
+    expect(direct).not.toHaveProperty('flood');
+    expect(flood?.flood).toBe(true);
+    expect(direct).not.toEqual(flood);
   });
 
   it('returns null below the header, or when the path overruns the frame', () => {
@@ -84,7 +101,7 @@ describe('decodePathDiscoveryResponse', () => {
     });
   });
 
-  it('decodes 0xFF flood sentinels on either leg as zero hops / no path', () => {
+  it('decodes 0xFF flood sentinels on either leg as zero hops / no path, flagged per leg', () => {
     const outFlood = Buffer.concat([
       Buffer.from([0x8d, 0x00]),
       Buffer.from('aabbccddeeff', 'hex'),
@@ -96,6 +113,7 @@ describe('decodePathDiscoveryResponse', () => {
       pubKeyPrefixHex: 'aabbccddeeff',
       outHops: 0,
       outPathHex: '',
+      outFlood: true,
       inHops: 1,
       inPathHex: '33',
     });
@@ -109,9 +127,46 @@ describe('decodePathDiscoveryResponse', () => {
       pubKeyPrefixHex: 'aabbccddeeff',
       outHops: 0,
       outPathHex: '',
+      outFlood: true,
+      inHops: 0,
+      inPathHex: '',
+      inFlood: true,
+    });
+  });
+
+  it('flags each leg independently, and neither for real 0-hop legs', () => {
+    // Both length bytes are pathless here, so the frame is just the header plus
+    // the two length bytes whatever their value.
+    const legs = (outLen: number, inLen: number) =>
+      decodePathDiscoveryResponse(
+        Buffer.concat([Buffer.from([0x8d, 0x00]), Buffer.from('aabbccddeeff', 'hex'), Buffer.from([outLen, inLen])]),
+      );
+
+    // 0x00 on both legs: heard direct in both directions, no flags at all.
+    const direct = legs(0x00, 0x00);
+    expect(direct).toEqual({
+      pubKeyPrefixHex: 'aabbccddeeff',
+      outHops: 0,
+      outPathHex: '',
       inHops: 0,
       inPathHex: '',
     });
+    expect(direct).not.toHaveProperty('outFlood');
+    expect(direct).not.toHaveProperty('inFlood');
+
+    // One leg flooded, the other direct — and the mirror image. The legs carry
+    // separate path_len bytes, so the flags must not leak into each other.
+    const outOnly = legs(0xff, 0x00);
+    expect(outOnly?.outFlood).toBe(true);
+    expect(outOnly).not.toHaveProperty('inFlood');
+
+    const inOnly = legs(0x00, 0xff);
+    expect(inOnly?.inFlood).toBe(true);
+    expect(inOnly).not.toHaveProperty('outFlood');
+
+    expect(outOnly).not.toEqual(direct);
+    expect(inOnly).not.toEqual(direct);
+    expect(outOnly).not.toEqual(inOnly);
   });
 
   it('returns null when a path length overruns the frame', () => {
