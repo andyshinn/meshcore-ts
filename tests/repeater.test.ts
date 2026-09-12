@@ -90,19 +90,156 @@ describe('repeater encoders: structured', () => {
 });
 
 describe('repeater decoders: parseStatusResponse', () => {
-  it('reads the sender prefix and decodes the leading status fields', () => {
-    const payload = Buffer.alloc(8); // battery(4) + tx queue(4)
-    payload.writeUInt32LE(4020, 0); // 4.02 V
-    payload.writeUInt32LE(2, 4); // TX queue = 2
-    const frame = Buffer.concat([Buffer.from([0x87, 0x00]), Buffer.from('aabbccddeeff', 'hex'), payload]);
-    const res = parseStatusResponse(frame);
-    expect(res?.senderPubKeyPrefixHex).toBe('aabbccddeeff');
-    expect(res?.fields[0]).toEqual({ name: 'Battery', value: 4.02, unit: 'V' });
-    expect(res?.fields[1]).toEqual({ name: 'TX queue', value: 2, unit: undefined });
+  // Ground truth: the firmware memcpy's `struct RepeaterStats` straight onto the
+  // wire (MeshCore/examples/simple_repeater/MyMesh.h:44). Packed, naturally
+  // aligned, no padding — 56 bytes on firmware ≥ v1.12.0:
+  //   u16 batt_milli_volts, u16 curr_tx_queue_len, i16 noise_floor, i16 last_rssi,
+  //   u32 n_packets_recv, u32 n_packets_sent, u32 total_air_time_secs,
+  //   u32 total_up_time_secs, u32 n_sent_flood, u32 n_sent_direct,
+  //   u32 n_recv_flood, u32 n_recv_direct, u16 err_events, i16 last_snr (×4),
+  //   u16 n_direct_dups, u16 n_flood_dups, u32 total_rx_air_time_secs,
+  //   u32 n_recv_errors.
+  interface RepeaterStats {
+    battMilliVolts: number;
+    currTxQueueLen: number;
+    noiseFloor: number;
+    lastRssi: number;
+    nPacketsRecv: number;
+    nPacketsSent: number;
+    totalAirTimeSecs: number;
+    totalUpTimeSecs: number;
+    nSentFlood: number;
+    nSentDirect: number;
+    nRecvFlood: number;
+    nRecvDirect: number;
+    errEvents: number;
+    lastSnrX4: number;
+    nDirectDups: number;
+    nFloodDups: number;
+    totalRxAirTimeSecs: number;
+    nRecvErrors?: number; // omitted → 52-byte legacy frame (pre-v1.12.0)
+  }
+
+  /** Serialise the firmware struct exactly as the repeater memcpy's it. */
+  function statsPayload(s: RepeaterStats): Buffer {
+    const b = Buffer.alloc(s.nRecvErrors === undefined ? 52 : 56);
+    b.writeUInt16LE(s.battMilliVolts, 0);
+    b.writeUInt16LE(s.currTxQueueLen, 2);
+    b.writeInt16LE(s.noiseFloor, 4);
+    b.writeInt16LE(s.lastRssi, 6);
+    b.writeUInt32LE(s.nPacketsRecv, 8);
+    b.writeUInt32LE(s.nPacketsSent, 12);
+    b.writeUInt32LE(s.totalAirTimeSecs, 16);
+    b.writeUInt32LE(s.totalUpTimeSecs, 20);
+    b.writeUInt32LE(s.nSentFlood, 24);
+    b.writeUInt32LE(s.nSentDirect, 28);
+    b.writeUInt32LE(s.nRecvFlood, 32);
+    b.writeUInt32LE(s.nRecvDirect, 36);
+    b.writeUInt16LE(s.errEvents, 40);
+    b.writeInt16LE(s.lastSnrX4, 42);
+    b.writeUInt16LE(s.nDirectDups, 44);
+    b.writeUInt16LE(s.nFloodDups, 46);
+    b.writeUInt32LE(s.totalRxAirTimeSecs, 48);
+    if (s.nRecvErrors !== undefined) b.writeUInt32LE(s.nRecvErrors, 52);
+    return b;
+  }
+
+  const statusFrame = (payload: Buffer): Buffer =>
+    Buffer.concat([Buffer.from([0x87, 0x00]), Buffer.from('aabbccddeeff', 'hex'), payload]);
+
+  // Every field distinct so a mis-aligned read can't coincidentally pass. The
+  // tx queue is deliberately NON-ZERO: the old (wrong) u32 battery read only
+  // looked correct because an idle repeater leaves the high half of that word
+  // zero, so a busy queue immediately corrupts the battery reading.
+  const busy: RepeaterStats = {
+    battMilliVolts: 4020, // 4.02 V
+    currTxQueueLen: 7,
+    noiseFloor: -122,
+    lastRssi: -85,
+    nPacketsRecv: 1234,
+    nPacketsSent: 567,
+    totalAirTimeSecs: 890,
+    totalUpTimeSecs: 93_784, // 1d 2h 3m (+4s)
+    nSentFlood: 11,
+    nSentDirect: 22,
+    nRecvFlood: 33,
+    nRecvDirect: 44,
+    errEvents: 5,
+    lastSnrX4: -26, // -6.5 dB
+    nDirectDups: 300, // > 255: proves these are u16, not u8
+    nFloodDups: 400,
+    totalRxAirTimeSecs: 4321,
+    nRecvErrors: 9,
+  };
+
+  const byName = (res: { fields: Array<{ name: string; value: number | string; unit?: string }> } | null) =>
+    new Map((res?.fields ?? []).map((f) => [f.name, f]));
+
+  it('reads the sender prefix', () => {
+    expect(parseStatusResponse(statusFrame(statsPayload(busy)))?.senderPubKeyPrefixHex).toBe('aabbccddeeff');
+  });
+
+  it('decodes every field of a 56-byte frame against the firmware struct', () => {
+    const f = byName(parseStatusResponse(statusFrame(statsPayload(busy))));
+    expect(f.get('Battery')).toEqual({ name: 'Battery', value: 4.02, unit: 'V' });
+    expect(f.get('TX queue')).toEqual({ name: 'TX queue', value: 7, unit: undefined });
+    expect(f.get('Noise floor')).toEqual({ name: 'Noise floor', value: -122, unit: 'dBm' });
+    expect(f.get('Last RSSI')).toEqual({ name: 'Last RSSI', value: -85, unit: 'dBm' });
+    expect(f.get('RX packets')).toEqual({ name: 'RX packets', value: 1234, unit: undefined });
+    expect(f.get('TX packets')).toEqual({ name: 'TX packets', value: 567, unit: undefined });
+    expect(f.get('TX airtime')).toEqual({ name: 'TX airtime', value: 890, unit: 's' });
+    expect(f.get('Uptime')).toEqual({ name: 'Uptime', value: '1d 2h 3m', unit: undefined });
+    expect(f.get('Flood sent')).toEqual({ name: 'Flood sent', value: 11, unit: undefined });
+    expect(f.get('Direct sent')).toEqual({ name: 'Direct sent', value: 22, unit: undefined });
+    expect(f.get('Flood rx')).toEqual({ name: 'Flood rx', value: 33, unit: undefined });
+    expect(f.get('Direct rx')).toEqual({ name: 'Direct rx', value: 44, unit: undefined });
+    expect(f.get('Error events')).toEqual({ name: 'Error events', value: 5, unit: undefined });
+    expect(f.get('Last SNR')).toEqual({ name: 'Last SNR', value: -6.5, unit: 'dB' });
+    expect(f.get('Direct dups')).toEqual({ name: 'Direct dups', value: 300, unit: undefined });
+    expect(f.get('Flood dups')).toEqual({ name: 'Flood dups', value: 400, unit: undefined });
+    expect(f.get('RX airtime')).toEqual({ name: 'RX airtime', value: 4321, unit: 's' });
+    expect(f.get('RX errors')).toEqual({ name: 'RX errors', value: 9, unit: undefined });
+    expect(f.size).toBe(18);
+  });
+
+  it('keeps the battery correct when the TX queue is non-zero (the old u32 layout did not)', () => {
+    const f = byName(parseStatusResponse(statusFrame(statsPayload({ ...busy, currTxQueueLen: 3 }))));
+    expect(f.get('Battery')?.value).toBe(4.02);
+    expect(f.get('TX queue')?.value).toBe(3);
+    // The old layout read battery as a u32 at [0..3] → 3 << 16 | 4020 = 200_628 mV.
+    expect(f.get('Battery')?.value).not.toBe(200.628);
+  });
+
+  it('still decodes an idle repeater (empty TX queue)', () => {
+    const f = byName(parseStatusResponse(statusFrame(statsPayload({ ...busy, currTxQueueLen: 0 }))));
+    expect(f.get('Battery')?.value).toBe(4.02);
+    expect(f.get('TX queue')?.value).toBe(0);
+  });
+
+  it('decodes a legacy 52-byte frame (pre-v1.12.0, no n_recv_errors)', () => {
+    const payload = statsPayload({ ...busy, nRecvErrors: undefined });
+    expect(payload.length).toBe(52);
+    const f = byName(parseStatusResponse(statusFrame(payload)));
+    expect(f.get('Battery')?.value).toBe(4.02);
+    expect(f.get('RX airtime')).toEqual({ name: 'RX airtime', value: 4321, unit: 's' });
+    expect(f.has('RX errors')).toBe(false);
+    expect(f.size).toBe(17);
+  });
+
+  it('degrades gracefully on a truncated payload instead of throwing', () => {
+    const short = statsPayload(busy).subarray(0, 10); // batt/queue/noise/rssi + 2 stray bytes
+    const res = parseStatusResponse(statusFrame(short));
+    expect(res?.fields.map((f) => f.name)).toEqual(['Battery', 'TX queue', 'Noise floor', 'Last RSSI']);
   });
 
   it('returns null below 8 bytes', () => {
     expect(parseStatusResponse(Buffer.alloc(7))).toBeNull();
+  });
+
+  it('tolerates an empty status payload', () => {
+    const res = parseStatusResponse(statusFrame(Buffer.alloc(0)));
+    expect(res?.fields).toEqual([]);
+    expect(res?.payloadHex).toBe('');
   });
 });
 

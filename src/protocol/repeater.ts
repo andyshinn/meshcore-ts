@@ -408,37 +408,17 @@ export function buildSendBinaryReq(destPublicKeyHex: string, reqData: Buffer): B
 
 // PUSH_STATUS_RESPONSE (firmware: companion_radio/MyMesh.cpp):
 //   [0x87][1B reserved][6B sender pub_key_prefix][status bytes...]
-// "status bytes" is the raw status blob the repeater returned. The firmware
-// doesn't pin a layout in MyMesh.cpp — meshcore-py treats it as a sequence of
-// fields keyed by a magic byte (uptime, batt mV, airtime, queue len, etc.).
-// For now we surface (a) the sender prefix, (b) the raw hex payload — the
-// renderer renders whatever fields it recognises and falls back to hex for
-// unknown firmware versions.
+// "status bytes" is the repeater's `RepeaterStats` struct, memcpy'd straight
+// onto the wire — see decodeStatusFields below for the layout. We surface
+// (a) the sender prefix, (b) the raw hex payload so a renderer can fall back
+// to hex for firmware versions that grow the struct further, and (c) the
+// decoded fields.
 export interface StatusResponse {
   senderPubKeyPrefixHex: string;
   payloadHex: string;
   fields: StatusField[];
 }
 
-// Best-effort decode of the meshcore "repeater status" blob. The well-known
-// layout used by Heltec/RAK repeaters is:
-//   [0..3]  bat_millivolts  uint32 LE
-//   [4..7]  curr_tx_queue   uint32 LE (packets currently queued for TX)
-//   [8..11] curr_free_queue uint32 LE (free slots in the TX queue)
-//   [12..13] last_rssi      int16 LE (dBm × 1)
-//   [14..17] n_packets_rx   uint32 LE
-//   [18..21] n_packets_tx   uint32 LE (since boot)
-//   [22..25] total_air_secs uint32 LE
-//   [26..29] uptime_secs    uint32 LE
-//   [30..33] sent_flood     uint32 LE
-//   [34..37] sent_direct    uint32 LE
-//   [38..41] recv_flood     uint32 LE
-//   [42..45] recv_direct    uint32 LE
-//   [46..47] full_evts      uint16 LE
-//   [48..49] last_snr_x4    int16 LE (SNR × 4 → dB / 4)
-//   [50]    n_direct_dups   uint8
-//   [51]    n_flood_dups    uint8
-// Older firmwares may truncate; we tolerate by stopping at the byte boundary.
 export interface StatusField {
   name: string;
   value: number | string;
@@ -456,26 +436,54 @@ export function parseStatusResponse(frame: Buffer): StatusResponse | null {
   };
 }
 
+// Decode the repeater status blob. The firmware memcpy's a packed, naturally
+// aligned `struct RepeaterStats` (no padding) straight onto the wire — see
+// MeshCore/examples/simple_repeater/MyMesh.h:44:
+//
+//   [0..1]   batt_milli_volts       uint16 LE (mV → V)
+//   [2..3]   curr_tx_queue_len      uint16 LE
+//   [4..5]   noise_floor            int16  LE (dBm)
+//   [6..7]   last_rssi              int16  LE (dBm)
+//   [8..11]  n_packets_recv         uint32 LE
+//   [12..15] n_packets_sent         uint32 LE
+//   [16..19] total_air_time_secs    uint32 LE (TX airtime)
+//   [20..23] total_up_time_secs     uint32 LE
+//   [24..27] n_sent_flood           uint32 LE
+//   [28..31] n_sent_direct          uint32 LE
+//   [32..35] n_recv_flood           uint32 LE
+//   [36..39] n_recv_direct          uint32 LE
+//   [40..41] err_events             uint16 LE (was `n_full_events`)
+//   [42..43] last_snr               int16  LE (SNR × 4 → divide for dB)
+//   [44..45] n_direct_dups          uint16 LE
+//   [46..47] n_flood_dups           uint16 LE
+//   [48..51] total_rx_air_time_secs uint32 LE
+//   [52..55] n_recv_errors          uint32 LE (added in firmware v1.12.0)
+//
+// Current firmware sends 56 bytes; pre-v1.12.0 repeaters send 52 (no
+// `n_recv_errors`). Each field is gated on the payload actually reaching it, so
+// shorter/legacy frames degrade to fewer fields rather than throwing.
 function decodeStatusFields(b: Buffer): StatusField[] {
   const fields: StatusField[] = [];
   const push = (name: string, value: number | string, unit?: string) => fields.push({ name, value, unit });
 
-  if (b.length >= 4) push('Battery', b.readUInt32LE(0) / 1000, 'V');
-  if (b.length >= 8) push('TX queue', b.readUInt32LE(4));
-  if (b.length >= 12) push('Free queue', b.readUInt32LE(8));
-  if (b.length >= 14) push('Last RSSI', b.readInt16LE(12), 'dBm');
-  if (b.length >= 18) push('RX packets', b.readUInt32LE(14));
-  if (b.length >= 22) push('TX packets', b.readUInt32LE(18));
-  if (b.length >= 26) push('Airtime', b.readUInt32LE(22), 's');
-  if (b.length >= 30) push('Uptime', formatUptime(b.readUInt32LE(26)));
-  if (b.length >= 34) push('Flood sent', b.readUInt32LE(30));
-  if (b.length >= 38) push('Direct sent', b.readUInt32LE(34));
-  if (b.length >= 42) push('Flood rx', b.readUInt32LE(38));
-  if (b.length >= 46) push('Direct rx', b.readUInt32LE(42));
-  if (b.length >= 48) push('Queue-full evts', b.readUInt16LE(46));
-  if (b.length >= 50) push('Last SNR', b.readInt16LE(48) / 4, 'dB');
-  if (b.length >= 51) push('Direct dups', b.readUInt8(50));
-  if (b.length >= 52) push('Flood dups', b.readUInt8(51));
+  if (b.length >= 2) push('Battery', b.readUInt16LE(0) / 1000, 'V');
+  if (b.length >= 4) push('TX queue', b.readUInt16LE(2));
+  if (b.length >= 6) push('Noise floor', b.readInt16LE(4), 'dBm');
+  if (b.length >= 8) push('Last RSSI', b.readInt16LE(6), 'dBm');
+  if (b.length >= 12) push('RX packets', b.readUInt32LE(8));
+  if (b.length >= 16) push('TX packets', b.readUInt32LE(12));
+  if (b.length >= 20) push('TX airtime', b.readUInt32LE(16), 's');
+  if (b.length >= 24) push('Uptime', formatUptime(b.readUInt32LE(20)));
+  if (b.length >= 28) push('Flood sent', b.readUInt32LE(24));
+  if (b.length >= 32) push('Direct sent', b.readUInt32LE(28));
+  if (b.length >= 36) push('Flood rx', b.readUInt32LE(32));
+  if (b.length >= 40) push('Direct rx', b.readUInt32LE(36));
+  if (b.length >= 42) push('Error events', b.readUInt16LE(40));
+  if (b.length >= 44) push('Last SNR', b.readInt16LE(42) / 4, 'dB');
+  if (b.length >= 46) push('Direct dups', b.readUInt16LE(44));
+  if (b.length >= 48) push('Flood dups', b.readUInt16LE(46));
+  if (b.length >= 52) push('RX airtime', b.readUInt32LE(48), 's');
+  if (b.length >= 56) push('RX errors', b.readUInt32LE(52));
   return fields;
 }
 

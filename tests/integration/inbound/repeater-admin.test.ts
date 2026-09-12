@@ -44,11 +44,15 @@ function ownerAnonBody(now: number, name: string, owner: string): Buffer {
   text.copy(body, 4);
   return body;
 }
-// PUSH_STATUS_RESPONSE: [0x87][0][6B prefix][stats…].
+// PUSH_STATUS_RESPONSE: [0x87][0][6B prefix][struct RepeaterStats…].
+// Field layout: simple_repeater/MyMesh.h — u16 batt_mv, u16 tx_queue_len,
+// i16 noise_floor, i16 last_rssi, … (see protocol/repeater.ts decodeStatusFields).
 function statusResponse(prefixHex: string): Buffer {
   const stats = Buffer.alloc(8);
-  stats.writeUInt32LE(4020, 0); // battery 4.02 V
-  stats.writeUInt32LE(2, 4); // tx queue 2
+  stats.writeUInt16LE(4020, 0); // battery 4.02 V
+  stats.writeUInt16LE(2, 2); // tx queue 2
+  stats.writeInt16LE(-120, 4); // noise floor
+  stats.writeInt16LE(-90, 6); // last rssi
   return Buffer.concat([Buffer.from([0x87, 0x00]), Buffer.from(prefixHex, 'hex'), stats]);
 }
 // PUSH_TELEMETRY_RESPONSE: [0x8b][0][6B prefix][CayenneLPP].
