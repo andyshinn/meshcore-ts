@@ -180,6 +180,65 @@ describe('inbound PUSH_ADVERT (0x80 re-advert)', () => {
     expect(observed[0].source).toBe('advert');
   });
 
+  it('upgrades a path-update refresh to an advert when a 0x80 lands while the lookup is out', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+    session.state.upsertContact(contact(PK, 1_000));
+
+    const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
+    session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
+      observed.push({ record, source }),
+    );
+
+    // Same upgrade as above, but the advert arrives AFTER the debounce has fired
+    // and the request is already on the wire. The refresh entry lives until the
+    // lookup resolves, so the later flavour still wins — and no second lookup is
+    // issued for a contact we are already fetching.
+    deliver(transport, pathUpdated(PK));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(lookupsFor(transport, PK)).toHaveLength(1);
+
+    deliver(transport, advert(PK));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(lookupsFor(transport, PK)).toHaveLength(1);
+
+    deliver(transport, contactRecordFrame(PK, 'Bob'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0].source).toBe('advert');
+  });
+
+  it('still ingests the advert when an app lookup races it for the same pubkey', async () => {
+    vi.useFakeTimers();
+    const { session, transport } = makeSession();
+    stop = () => session.stop();
+
+    const observed: Array<{ record: Models.ContactRecord; source: Models.ContactSource }> = [];
+    session.events.on('contactObserved', (record: Models.ContactRecord, source: Models.ContactSource) =>
+      observed.push({ record, source }),
+    );
+
+    // The app asks for this contact first, so its waiter is the OLDEST for the
+    // pubkey and takes the single RESP_CONTACT the radio sends. The advert's own
+    // refresh must not starve behind it — the record is ingested against the
+    // refresh entry rather than against whichever waiter happened to resolve.
+    const appLookup = session.getContactByKey(UNKNOWN_PK);
+    deliver(transport, advert(UNKNOWN_PK));
+    await vi.advanceTimersByTimeAsync(100);
+
+    deliver(transport, contactRecordFrame(UNKNOWN_PK, 'Contested'));
+    await vi.advanceTimersByTimeAsync(1);
+
+    // The app's own promise still resolves with the record.
+    expect((await appLookup)?.publicKeyHex).toBe(UNKNOWN_PK);
+    // ...and the advert was not lost: ingested once, as heard-live.
+    expect(observed).toHaveLength(1);
+    expect(observed[0].source).toBe('advert');
+    expect(session.state.getContacts().map((c) => c.key)).toContain(`c:${UNKNOWN_PK}`);
+  });
+
   it('never moves last-seen backwards when the advertiser clock is behind ours', () => {
     vi.useFakeTimers({ now: NOW });
     const { session, transport } = makeSession();

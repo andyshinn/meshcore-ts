@@ -202,15 +202,12 @@ export interface PendingContactByKey {
   publicKeyHex: string;
   resolve: (record: ContactRecord | null) => void;
   timer: ReturnType<typeof setTimeout>;
-  /** True when `scheduleContactRefresh` issued this lookup, so its own `.then()`
-   *  will ingest the reply. An app-initiated `getContactByKey` sets this false:
-   *  it consumes the RESP_CONTACT without ingesting, so a refresh must not
-   *  suppress itself behind one. */
-  internal: boolean;
 }
 
-/** A debounced single-contact refresh in flight. `source` is the strongest
- *  flavour seen while the timer was running — 'advert' outranks 'sync'. */
+/** A single-contact refresh, from the moment it is scheduled until its lookup
+ *  resolves. `source` is the strongest flavour seen over that whole span —
+ *  'advert' outranks 'sync'. `timer` has already fired once the lookup is out;
+ *  clearing it again is a harmless no-op. */
 export interface ContactRefreshEntry {
   timer: ReturnType<typeof setTimeout>;
   source: ContactSource;
@@ -382,52 +379,39 @@ export function scheduleContactsResync(ctx: FeatureContext): void {
  *  path update is not an advert.
  *
  *  Non-blocking: the fetch is fire-and-forget (no await in the frame handler).
- *  De-duplicated: a per-pubkey debounce timer ensures a burst of pushes for
- *  the same contact fires only one request. A second pending lookup for the
- *  same pubkey is also suppressed when one is already in flight. */
+ *  De-duplicated: a per-pubkey entry covers both the 50ms debounce and the
+ *  request's round-trip, so a burst of pushes for the same contact fires one
+ *  request and a push arriving mid-flight upgrades that entry instead of
+ *  issuing a second. */
 export function scheduleContactRefresh(ctx: FeatureContext, publicKeyHex: string, source: ContactSource = 'sync'): void {
-  // If there's already a pending in-flight lookup for this pubkey, skip — the
-  // arriving RESP_CONTACT will be consumed by resolvePendingContactByKey and
-  // then ingested below.
-  //
-  // Only OUR OWN in-flight lookup counts. An app-initiated `getContactByKey` also
-  // parks a pending entry for this pubkey, but `resolvePendingContactByKey`
-  // consumes its RESP_CONTACT and returns without ingesting — so deferring to it
-  // would drop the advert entirely and defeat the whole point of this function.
-  //
-  // Known gap, deliberately left alone: an in-flight refresh scheduled by a
-  // PUSH_PATH_UPDATED swallows a PUSH_ADVERT that lands while it is out, so that
-  // contact is ingested as 'sync' and loses its heard-live flag. Closing it means
-  // carrying the source on PendingContactByKey and upgrading it mid-flight; the
-  // window is the request's round-trip rather than the 50ms debounce, and the
-  // next advert re-flags the contact anyway.
-  if (ctx.rt.contactsIter.pendingContactByKey.some((e) => e.internal && e.publicKeyHex === publicKeyHex)) return;
-  // Debounce: if a refresh is already scheduled for this pubkey, let it fire —
+  // A refresh already scheduled or in flight for this pubkey covers this push —
   // but upgrade a 'sync' refresh to 'advert' first, so a PUSH_ADVERT arriving
-  // inside a PUSH_PATH_UPDATED's debounce window still reports as heard-live.
+  // inside a PUSH_PATH_UPDATED's window still reports as heard-live. The entry
+  // lives until the lookup resolves, not just until the timer fires, so this
+  // holds for the whole round-trip rather than only the 50ms debounce.
+  //
+  // Deliberately NOT gated on `pendingContactByKey`: an app-initiated
+  // `getContactByKey` parks an entry there too, but it resolves without
+  // ingesting, so deferring to it would drop the advert entirely and defeat the
+  // point of this function.
   const scheduled = ctx.rt.contactsIter.refreshTimers.get(publicKeyHex);
   if (scheduled) {
     if (source === 'advert') scheduled.source = 'advert';
     return;
   }
   const timer = setTimeout(() => {
-    const entry = ctx.rt.contactsIter.refreshTimers.get(publicKeyHex);
-    ctx.rt.contactsIter.refreshTimers.delete(publicKeyHex);
-    const effectiveSource = entry?.source ?? source;
-    // Fire-and-forget: fetch the single contact and ingest the updated record.
-    getContactByKey(ctx, publicKeyHex, { internal: true })
-      .then((record) => {
-        if (record) {
-          // The radio answering CMD_GET_CONTACT_BY_KEY is itself proof that the
-          // radio holds this contact, whatever our own map said a moment ago.
-          // "Is it on the radio" and "did we hear it live" are independent facts;
-          // deriving the former from `source` would drop exactly the newly
-          // auto-added contact this path exists to rescue.
-          ingestContact(ctx, record, effectiveSource, { onRadio: true });
-          ctx.log.debug(`refreshed contact ${publicKeyHex.slice(0, 12)} after push`);
-        }
+    // Fire-and-forget. The entry stays in `refreshTimers` across the round-trip
+    // (see above), and `resolvePendingContactByKey` ingests the reply against it.
+    getContactByKey(ctx, publicKeyHex)
+      .then(() => {
+        // A record is ingested by `resolvePendingContactByKey` — the only path
+        // that resolves this promise with one — which also retires the entry.
+        // Reaching here with the entry still present means the lookup came back
+        // empty: RESP_ERR, the 5s timeout, or teardown.
+        ctx.rt.contactsIter.refreshTimers.delete(publicKeyHex);
       })
       .catch((err) => {
+        ctx.rt.contactsIter.refreshTimers.delete(publicKeyHex);
         ctx.log.warn(`contact refresh failed for ${publicKeyHex.slice(0, 12)}: ${(err as Error).message}`);
       });
   }, 50);
@@ -614,6 +598,25 @@ function resolvePendingContactByKey(ctx: FeatureContext, record: ContactRecord):
   const [entry] = ctx.rt.contactsIter.pendingContactByKey.splice(i, 1);
   clearTimeout(entry.timer);
   entry.resolve(record);
+
+  // The radio sends one RESP_CONTACT per request, and the waiter resolved above
+  // is simply the oldest one for this pubkey — which may be an app-initiated
+  // `getContactByKey` that resolves without ingesting, starving a refresh racing
+  // it for the same key. So the refresh entry, not the waiter, owns the ingest:
+  // this is the single path by which a solicited record ever surfaces, so doing
+  // it here runs exactly once however the waiters happened to be ordered. Retire
+  // the entry too, so it cannot fire a second request.
+  const refresh = ctx.rt.contactsIter.refreshTimers.get(record.publicKeyHex);
+  if (refresh) {
+    clearTimeout(refresh.timer);
+    ctx.rt.contactsIter.refreshTimers.delete(record.publicKeyHex);
+    // The radio answering for this key is proof it holds the contact, whatever
+    // our own map said a moment ago. "Is it on the radio" and "did we hear it
+    // live" are independent facts; deriving the former from `source` would drop
+    // exactly the newly auto-added contact this path exists to rescue.
+    ingestContact(ctx, record, refresh.source, { onRadio: true });
+    ctx.log.debug(`refreshed contact ${record.publicKeyHex.slice(0, 12)} after push`);
+  }
   return true;
 }
 
@@ -629,15 +632,8 @@ export function failPendingContactByKey(ctx: FeatureContext): boolean {
 }
 
 /** Look up a single contact on the radio by public key (CMD_GET_CONTACT_BY_KEY).
- *  Resolves the contact record, or null when the radio doesn't have it.
- *
- *  `opts.internal` marks a lookup issued by `scheduleContactRefresh`, whose
- *  `.then()` ingests the reply — see `PendingContactByKey.internal`. */
-export function getContactByKey(
-  ctx: FeatureContext,
-  destPublicKeyHex: string,
-  opts?: { internal?: boolean },
-): Promise<ContactRecord | null> {
+ *  Resolves the contact record, or null when the radio doesn't have it. */
+export function getContactByKey(ctx: FeatureContext, destPublicKeyHex: string): Promise<ContactRecord | null> {
   const frame = encodeGetContactByKey(destPublicKeyHex);
   // encodeGetContactByKey already validated the key; normalise to lowercase hex
   // for the pending-lookup match (record.publicKeyHex is lowercase from decode).
@@ -645,7 +641,6 @@ export function getContactByKey(
   return new Promise<ContactRecord | null>((resolve, reject) => {
     const entry: PendingContactByKey = {
       publicKeyHex,
-      internal: opts?.internal === true,
       resolve,
       timer: setTimeout(() => {
         removePendingContactByKey(ctx, entry);
