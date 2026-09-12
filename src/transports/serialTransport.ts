@@ -39,8 +39,11 @@ export class SerialTransport implements Transport {
     port.on('error', () => this.setState('error'));
 
     // If already open, announce 'connected' after construction so onStateChange
-    // subscribers still see it. onTransportState is edge-guarded, so this is a
-    // no-op for a session that already saw getState() === 'connected'.
+    // subscribers still see it — there is no 'open' event coming for a port
+    // that was open before we got it. This microtask is queued HERE, at
+    // construction, so it runs ahead of the one MeshCoreSession.start() queues
+    // for the same case: this announcement drives the connect, and the
+    // session's deferred drive finds the work done and stands down.
     if (this.state === 'connected') {
       queueMicrotask(() => this.stateCb?.('connected'));
     }
