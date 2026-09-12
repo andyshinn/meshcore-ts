@@ -62,6 +62,41 @@ describe('SerialTransport', () => {
     expect(frames).toEqual([[1, 2, 3], [4], [5, 6]]);
   });
 
+  it('drops a buffered partial frame on close so a reopen is not spliced into it', () => {
+    const port = new FakeSerialPort();
+    const t = new SerialTransport(port);
+    const frames: number[][] = [];
+    t.onData((f) => frames.push([...f]));
+
+    // A truncated frame left in the buffer when the port goes away: the header
+    // is valid (0x3e, 16 payload bytes) but only 2 payload bytes arrived, so
+    // push() buffers it rather than resyncing past it.
+    port.emit('data', Uint8Array.from([0x3e, 0x10, 0x00, 0xaa, 0xbb]));
+    expect(frames).toEqual([]);
+
+    port.emit('close');
+    port.emit('open');
+
+    // The consumer reopened the same port object. The first frame of the new
+    // session must arrive intact, not glued onto the stale 5-byte tail.
+    port.emit('data', wire([1, 2, 3]));
+    expect(frames).toEqual([[1, 2, 3]]);
+  });
+
+  it('keeps the buffer across an "error" that does not end the stream', () => {
+    const port = new FakeSerialPort();
+    const t = new SerialTransport(port);
+    const frames: number[][] = [];
+    t.onData((f) => frames.push([...f]));
+
+    // A serialport 'error' (e.g. a failed write) does not imply the byte
+    // stream ended, so a partial frame still in flight must survive it.
+    port.emit('data', Uint8Array.from([0x3e, 0x03, 0x00, 1, 2]));
+    port.emit('error', new Error('write failed'));
+    port.emit('data', Uint8Array.from([3]));
+    expect(frames).toEqual([[1, 2, 3]]);
+  });
+
   it('encodes outbound frames with the 0x3c header on send', async () => {
     const port = new FakeSerialPort();
     const t = new SerialTransport(port);

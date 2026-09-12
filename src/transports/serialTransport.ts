@@ -35,7 +35,21 @@ export class SerialTransport implements Transport {
       for (const frame of this.deframer.push(chunk)) this.dataCb?.(frame);
     });
     port.on('open', () => this.setState('connected'));
-    port.on('close', () => this.setState('idle'));
+    port.on('close', () => {
+      // The byte stream ended, so any buffered partial frame is now garbage.
+      // The consumer owns the port and may reopen this same object; without
+      // this the stale tail survives and splices itself into the first bytes
+      // of the next open. push() only resyncs on an INVALID header, and a
+      // partial frame's header is valid, so the splice is not resynced away —
+      // it fabricates one bogus frame and swallows the real frames behind it.
+      this.deframer.reset();
+      this.setState('idle');
+    });
+    // Deliberately NOT reset on 'error': a serialport 'error' does not imply
+    // the stream ended (a failed write leaves the port open and the byte
+    // stream flowing), so discarding the buffer there would drop a legitimate
+    // in-flight partial frame. Errors that really do end the stream emit
+    // 'close' as well, which is handled above.
     port.on('error', () => this.setState('error'));
 
     // If already open, announce 'connected' after construction so onStateChange
