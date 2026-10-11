@@ -37,7 +37,7 @@ transport.setState('connected');
 `contactObserved`, `messages`, `messageUpserted`, `messageState`,
 `messagePathHeard`, `cliSendState`, `cliUnmatched`, `owner`, `radioSettings`,
 `repeaterStatus`, `repeaterTelemetry`, `pathLearned`, `deviceIdentity`,
-`autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `deviceInfo`,
+`autoAddConfig`, `telemetryPolicy`, `gpsConfig`, `customVars`, `deviceInfo`,
 `deviceCapabilities`.
 
 All payloads are exported types — see `Ports.EventMap` in the
@@ -176,13 +176,15 @@ air: the repeater may still run it and answer, and that late answer arrives on
 ## What the session can do
 
 Beyond messaging, the session covers contacts & paths (`getContactByKey`,
-`setContactPath`, `addContactToRadio`, `setContactFavourite`, …), channels
-(`setChannel`, `pickFreeSlot`, `deriveSecret`, …), radio/device settings
-(`setRadioParams`, `setAdvertName`, `setGpsConfig`, `reboot`, …), time
+`setContactPath`, `addContactToRadio`, `setContactFavourite`,
+`setContactTelemetryPerms`, …), channels (`setChannel`, `pickFreeSlot`,
+`deriveSecret`, …), radio/device settings (`setRadioParams`, `setAdvertName`,
+`setGpsConfig`, `requestCustomVars`, `setCustomVar`, `reboot`, …), time
 (`getDeviceTime` / `setDeviceTime` / `syncDeviceTime`), device admin & signing
 (`exportPrivateKey`, `setDevicePin`, `factoryReset`, `signData`), path
 diagnostics & raw frames (`sendPathDiscoveryReq`, `sendRawData`, …), and
 repeater administration (`repeaterLogin`, `repeaterSendCli`, `repeaterTracePath`,
-`sendStatusReq`, `sendTelemetryReq`, …).
+`sendStatusReq`, `sendTelemetryReq`, `sendBinaryRequest`, …), and the radio's
+own telemetry (`requestSelfTelemetry`).
 
 See the [API reference](../../api/readme/) for the complete, typed surface.

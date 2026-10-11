@@ -7,6 +7,150 @@ Notable changes to `meshcore-ts`, newest first. Versions follow
 [semantic versioning](https://semver.org/); pre-`1.0` minor bumps may still
 carry behaviour changes.
 
+## 0.9.0
+
+_Telemetry: the radio's own sensors, per-contact telemetry permissions, the
+telemetry policy read back from the radio, and the sensor settings behind
+custom vars. Getting binary requests to report RESP_SENT and accept an abort
+meant fixing how the library pairs the radio's id-less replies with the
+commands that caused them, and that fix reaches well beyond telemetry._
+
+### Added
+
+- **`session.requestSelfTelemetry({ timeoutMs? })`** reads the connected
+  radio's own battery, MCU temperature and attached sensors, and resolves the
+  raw CayenneLPP bytes exactly as the radio sent them. Decode them with
+  `Protocol.parseTelemetryLpp`. The request never goes on the air and does not
+  emit `repeaterTelemetry`. Firmware without self telemetry answers
+  `ERR_CODE_UNSUPPORTED_CMD`; the call then rejects with an
+  `Errors.ProtocolError` whose message says "unsupported". The default timeout
+  is `Models.SELF_TELEMETRY_TIMEOUT_MS` (5 s).
+
+- **`sendBinaryRequest` takes `onSent` and `signal`.** `onSent({ flood,
+  estTimeoutMs })` fires once, when the radio reports the request on the air,
+  so a UI can show "flooded, reply expected within N s". `signal` aborts the
+  wait: the promise rejects with `signal.reason` (an `AbortError` for a plain
+  `abort()`), and the reply tag is released, so a late reply is dropped. The
+  options type is `Features.BinaryRequestOptions`, and the `onSent` payload is
+  `Features.RequestSentInfo`.
+
+- **Per-contact telemetry permissions.** `Contact.telemetryPerms` and
+  `DiscoveredContact.telemetryPerms` (`{ base, loc, env }`) are decoded from
+  bits 1–3 of the firmware contact flags. `session.setContactTelemetryPerms
+  (contactKey, perms)` writes them and resolves `true` on the radio's
+  `RESP_OK`. The radio consults these bits only for a group whose
+  `TelemetryPolicy` mode is 1. Helpers: `Models.telemetryPermsFromFlags`,
+  `Models.flagsWithTelemetryPerms`.
+
+- **Custom vars as a generic map.** `session.requestCustomVars()` now resolves
+  `Record<string, string>` (`{}` when the radio exposes no settings, e.g. no
+  GPS hardware), and the new `customVars` event fires on every reply,
+  including `{}`, so "nothing to configure" can be told apart from "no reply".
+  `session.setCustomVar(key, value)` writes one setting. `gpsConfig` still
+  fires as before.
+
+- **`Protocol.buildTelemetryReqData(mask?)`** builds a
+  `REQ_TYPE_GET_TELEMETRY_DATA` body with the inverse permission mask, ready
+  for `sendBinaryRequest`. Its doc comment spells out how repeaters, sensors
+  and companions each apply the mask. In particular, a companion contact sends
+  no reply at all to a request with `base: false`.
+
+### Fixed
+
+- **`telemetryPolicy` now reflects the radio.** `RESP_SELF_INFO` bytes 44 and
+  46 (multi-acks and the three telemetry modes) are folded into the policy,
+  and `telemetryPolicy` is emitted on every SELF_INFO. Until now the library's
+  `{1,1,1,1}` default survived until the first `setOtherParams`.
+
+- **Rewriting a contact no longer clobbers it.** `CMD_ADD_UPDATE_CONTACT`
+  replaces the whole record. `setContactPath` sent flags `0`, wiping the
+  favourite and the telemetry permissions. The anon-request zero-hop shim kept
+  only the favourite bit, and stamped the host clock into
+  `last_advert_timestamp`. That last one is the worst: after the shim, the
+  radio dropped the node's next adverts as replays whenever the node's clock
+  was behind ours, which is common for repeaters. `setContactFavourite` and
+  `setContactTelemetryPerms` turned flood contacts into zero-hop ones, and
+  `addContactToRadio` wrote the advert time into `lastmod` and the host time
+  into `last_advert_timestamp`. Every rewrite now carries each field from the
+  radio's last report: flags, name, last advert time, position, and the path
+  (flood stays `0xFF`). `lastmod` is left for the radio to stamp from its own
+  clock.
+
+- **Each command's reply goes to that command.** `RESP_SENT` and `RESP_ERR`
+  carry no correlation id. The library used to give the admin queue first claim
+  on every `RESP_SENT`, and every `RESP_ERR` to the oldest settings write.
+  Several writes held no reply slot at all, so their `RESP_OK`/`RESP_ERR`
+  settled whatever was waiting: channel sends, self adverts, path resets,
+  contact removal, path-hash mode, logout, the handshake's channel probes past
+  the firmware's channel count, and a `GET_CONTACTS` refused with `BAD_STATE`
+  while an enumeration was already running. The firmware answers commands in arrival
+  order, so every waiter now takes a write-order stamp, and each reply goes to
+  the oldest command still waiting for one. Some fixes that follow:
+  - A DM sent just before a binary request keeps its own `RESP_SENT`.
+  - A `RESP_ERR` to a binary request rejects it with `ProtocolError`
+    (`NOT_FOUND`: the contact isn't on the radio; `TABLE_FULL`: the send
+    failed) instead of a 5 s timeout.
+  - A refused login fails at once, not after 20 s.
+  - A typed request (`getDeviceTime`, `getTuningParams`,
+    `repeaterGetLocalStats`, …) answered with `RESP_ERR` rejects with
+    `ProtocolError` instead of timing out.
+  - A refused auto-resync is retried instead of failing an in-flight DM.
+
+- **An older mesh request fails as soon as a newer one replaces it.** The
+  radio tracks one outstanding login / binary / anon / status /
+  path-discovery request and silently drops the reply to any earlier one. The
+  earlier request now rejects with a "superseded" error when the newer one's
+  `RESP_SENT` arrives, instead of waiting out its full timeout.
+
+- **A flood-only repeater no longer keeps a zero-hop path after a failed anon
+  request**, and a zero-hop neighbour is no longer reset to flood by one.
+
+- **`importPrivateKey` re-reads SELF_INFO**, so the owner (and anything keyed
+  on its prefix) follows the new identity. On a build without
+  `ENABLE_PRIVATE_KEY_IMPORT` it now rejects `Errors.FeatureDisabledError` at
+  once. Before, it waited for a reply that never came, and the next unrelated
+  `RESP_OK` could be taken as success.
+
+- **`parseTelemetryLpp`** reads voltage as signed, as the CayenneLPP library
+  the firmware uses encodes it. It stops at trailing zero padding (mesh replies
+  are AES-block padded) and keeps the bytes of a truncated record in an
+  `Unknown` field instead of dropping them.
+
+### Changed
+
+- **`setContactFavourite`, `setContactPath`, `resetContactPath`,
+  `removeContactFromRadio` and `setPathHashMode` wait for the radio's
+  `RESP_OK`.** They reject when it doesn't come: `Errors.ProtocolError` on a
+  refusal, `Errors.ProtocolTimeoutError` on silence. They update local state
+  only after the radio confirms. `removeContactFromRadio` treats `NOT_FOUND` as
+  done.
+
+- **`requestCustomVars` returns the map and rejects** when no radio is
+  attached, on firmware without the command, and on a timeout. It used to
+  resolve `void` whatever happened.
+
+- **`setGpsConfig` resolves `true` once the `gps` toggle is applied, even
+  when the radio refuses `gps_interval`.** Only EnvironmentSensorManager
+  builds accept the interval; the T1000-E and other dedicated trackers refuse
+  it after the toggle has already taken effect. The interval clamp is now
+  `[60, 86400]` (the firmware stores `[0, 86400]`).
+
+- **`setCustomVar('gps', v)` sends `'0'` or `'1'`.** The firmware starts the
+  GPS for any value but `'0'`, but persists it as on only for `'1'`.
+
+### For consumers
+
+- **CoreSense:** every name and shape in the 0.9.0 telemetry contract is as
+  specified, so `sessionAdapter.ts` needs no change. Two details differ from
+  the letter of the spec. An abort rejects with `signal.reason`, which is an
+  `AbortError` unless you pass your own reason. `Contact.telemetryPerms` is
+  optional, because placeholder contacts synthesized from an unknown DM sender
+  have no flags. Once you see `telemetryPolicy` after connect, the
+  `getSelfInfo()` workaround can go.
+
+- **Wrap the five contact/path setters listed under Changed in `try`/`catch`**
+  if you call them fire-and-forget; they can now reject.
+
 ## 0.8.1
 
 _Two things 0.8.0 made reachable — an empty path that could not say why it was
