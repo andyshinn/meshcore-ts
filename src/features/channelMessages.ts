@@ -198,8 +198,12 @@ export const channelMessagesFeature: Feature = {
       }
     }
 
-    // Deterministic id: re-receipts of the same flood message via different
-    // paths collide here so upsertMessage merges them into one row.
+    // Deterministic id: a repeat delivery of the same message collides here so
+    // upsertMessage merges it into one row. The firmware already drops repeat
+    // flood copies (Mesh::onRecvPacket gates GRP_TXT on wasSeen, and the packet
+    // hash excludes the path), so this is normally one push per packet. Repeats
+    // still reach us when its 160-entry seen-table ring wraps or after a radio
+    // reboot.
     const bodyHash = createHash('sha1').update(parsed.cleanBody).digest('hex').slice(0, 12);
     const id = `chmsg-${channel.key}-${parsed.timestampUnix}-${bodyHash}`;
 
