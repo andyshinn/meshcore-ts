@@ -1,9 +1,9 @@
 import { Buffer } from 'node:buffer';
-import { ProtocolError } from '../model/errors';
 import { CMD, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
 import { scheduleContactRefresh, upsertContact } from './contacts';
 import type { Feature, FeatureContext } from './feature';
+import { claimMeshRequestSlot } from './repeaterAdmin';
 
 // Path diagnostics (firmware: companion_radio/MyMesh.cpp). Two queries plus a
 // liveness push:
@@ -302,9 +302,12 @@ export function sendPathDiscoveryReq(ctx: FeatureContext, contactKey: string): P
   void (async () => {
     try {
       // RESP_SENT confirms dispatch (consumed here so it isn't mistaken for a
-      // DM); RESP_ERR (NOT_FOUND / TABLE_FULL) comes back as null.
-      const sent = await ctx.requestOrNull(encodeSendPathDiscoveryReq(pubkey), RESP.SENT);
-      if (sent === null) disarmDiscovery(ctx, entry, new ProtocolError());
+      // DM); RESP_ERR (NOT_FOUND / TABLE_FULL) rejects ProtocolError. Path
+      // discovery takes the radio's one mesh-request slot, claimed in the turn
+      // the RESP_SENT is handled so claims stay in wire order.
+      await ctx.requestOrError(encodeSendPathDiscoveryReq(pubkey), RESP.SENT, {
+        onReply: () => claimMeshRequestSlot(ctx, (err) => disarmDiscovery(ctx, entry, err)),
+      });
     } catch (err) {
       disarmDiscovery(ctx, entry, err as Error);
     }

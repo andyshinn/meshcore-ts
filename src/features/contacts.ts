@@ -1,10 +1,19 @@
 import { Buffer } from 'node:buffer';
-import { advTypeToKind, hashSizeFromOutPathLen, hopsFromOutPathLen } from '../model/contacts';
+import {
+  advTypeToKind,
+  CONTACT_FLAG_FAVOURITE,
+  flagsWithTelemetryPerms,
+  hashSizeFromOutPathLen,
+  hopsFromOutPathLen,
+  telemetryPermsFromFlags,
+} from '../model/contacts';
 import type { ContactRecord, ContactSource } from '../model/contactTypes';
+import type { DiscoveredRow } from '../model/state/discoveredStore';
 import type { Contact, PathHashSize } from '../model/types';
-import { ADV_TYPE, CMD, PUSH, RESP } from '../protocol/codes';
+import { ADV_TYPE, CMD, ERR_CODE, PUSH, RESP } from '../protocol/codes';
 import { parsePublicKey } from '../protocol/pubkey';
 import type { Feature, FeatureContext } from './feature';
+import { nextReplySeq } from './replyOrder';
 
 // ---- Wire types --------------------------------------------------------
 
@@ -16,8 +25,13 @@ export interface UpdateContactInput {
   publicKeyHex: string;
   advType: number;
   flags: number;
-  /** Hex string of the out_path bytes (length <= 64). Empty = flood. */
+  /** Hex string of the out_path bytes (length <= 64). Empty = a zero-hop
+   *  direct path (out_path_len 0); pass `flood` for an unknown path. */
   outPathHex: string;
+  /** Write out_path_len 0xFF (no known path: the firmware floods), ignoring
+   *  `outPathHex`. Needed to rewrite a flood contact without turning it into a
+   *  zero-hop one. */
+  flood?: boolean;
   /** Bytes-per-hop for the out_path, used to pack the firmware path_len byte
    *  (byte 35). Defaults to 1 (each hop is one hash byte). Must divide the
    *  outPathHex byte length. */
@@ -27,7 +41,10 @@ export interface UpdateContactInput {
   /** Wall-clock unix seconds for the firmware's `timestamp` slot. Falls back
    *  to `Math.floor(Date.now()/1000)` when unset. */
   timestampUnix?: number;
-  /** Optional GPS + last-advert tail. Either ALL provided or ALL omitted. */
+  /** Optional GPS tail: both or neither. `lastAdvertUnix` adds the record's
+   *  `lastmod` (offset 144) after it — despite its name it is not
+   *  last_advert_timestamp (that is `timestampUnix`) — and needs the GPS pair.
+   *  Without it the firmware stamps lastmod from its own clock. */
   gpsLat?: number;
   gpsLon?: number;
   lastAdvertUnix?: number;
@@ -55,7 +72,7 @@ export function encodeGetContacts(since?: number): Buffer {
 // is all-present or all-absent (issue #427 in zjs81/meshcore-open).
 export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
   const pubkey = parsePublicKey(input.publicKeyHex, 'update contact');
-  const path = Buffer.from(input.outPathHex, 'hex');
+  const path = input.flood ? Buffer.alloc(0) : Buffer.from(input.outPathHex, 'hex');
   if (path.length > 64) {
     throw new Error(`out_path is ${path.length}B, max 64`);
   }
@@ -69,26 +86,73 @@ export function encodeAddUpdateContact(input: UpdateContactInput): Buffer {
   }
   const name = Buffer.from(input.name, 'utf8').subarray(0, 31);
 
-  const hasTail = input.gpsLat !== undefined && input.gpsLon !== undefined && input.lastAdvertUnix !== undefined;
-  const total = hasTail ? 148 : 136;
+  const hasGps = input.gpsLat !== undefined && input.gpsLon !== undefined;
+  const hasLastmod = hasGps && input.lastAdvertUnix !== undefined;
+  const total = hasLastmod ? 148 : hasGps ? 144 : 136;
   const out = Buffer.alloc(total);
   out[0] = CMD.ADD_UPDATE_CONTACT;
   pubkey.copy(out, 1, 0, 32);
   out[33] = input.advType & 0xff;
   out[34] = input.flags & 0xff;
   // Pack the firmware path_len byte: bits 7-6 = hashSize-1, bits 5-0 = hop
-  // count. An empty path stays 0 (no source-route).
-  out[35] = path.length === 0 ? 0 : (((hashSize - 1) & 0x03) << 6) | (hopCount & 0x3f);
+  // count. An empty path stays 0 (zero-hop direct); flood is 0xFF.
+  out[35] = input.flood ? 0xff : packOutPathLen(path.length, hashSize);
   path.copy(out, 36); // remainder of the 64B region stays zero-padded
   name.copy(out, 100);
   const ts = input.timestampUnix ?? Math.floor(Date.now() / 1000);
   out.writeUInt32LE(ts >>> 0, 132);
-  if (hasTail) {
+  if (hasGps) {
     out.writeInt32LE(Math.round((input.gpsLat ?? 0) * 1_000_000), 136);
     out.writeInt32LE(Math.round((input.gpsLon ?? 0) * 1_000_000), 140);
-    out.writeUInt32LE((input.lastAdvertUnix ?? 0) >>> 0, 144);
   }
+  if (hasLastmod) out.writeUInt32LE((input.lastAdvertUnix ?? 0) >>> 0, 144);
   return out;
+}
+
+/** The firmware flags byte to send when rewriting `contact` with
+ *  CMD_ADD_UPDATE_CONTACT, which replaces the whole record. The discovered row
+ *  holds the byte the radio last reported, so it wins; without one the byte is
+ *  rebuilt from the contact's favourite + telemetry permissions. */
+export function contactRecordFlags(
+  ctx: FeatureContext,
+  contact: Pick<Contact, 'publicKeyHex' | 'favourite' | 'telemetryPerms'>,
+): number {
+  const row = ctx.state.discovered.get(contact.publicKeyHex);
+  if (row) return row.flags;
+  const base = contact.favourite ? CONTACT_FLAG_FAVOURITE : 0;
+  return contact.telemetryPerms ? flagsWithTelemetryPerms(base, contact.telemetryPerms) : base;
+}
+
+/** CMD_ADD_UPDATE_CONTACT replaces the whole record, so a rewrite carries
+ *  every field from the discovered row — the radio's last report — and only
+ *  `patch` changes: flags, or the out_path. A flood row stays flood
+ *  (out_path_len 0xFF). lastmod is left out, so the firmware stamps it from
+ *  its own clock as it does for any update without one. */
+export function encodeContactRecordRewrite(
+  row: DiscoveredRow,
+  patch: { flags?: number; outPathHex?: string; outPathHashSize?: PathHashSize } = {},
+): Buffer {
+  const keepPath = patch.outPathHex === undefined;
+  return encodeAddUpdateContact({
+    publicKeyHex: row.pubkey,
+    advType: row.type,
+    flags: patch.flags ?? row.flags,
+    flood: keepPath && row.out_path_len === 0xff,
+    outPathHex: keepPath ? row.out_path_hex : (patch.outPathHex ?? ''),
+    outPathHashSize: keepPath ? hashSizeFromOutPathLen(row.out_path_len) : patch.outPathHashSize,
+    name: row.name,
+    timestampUnix: row.last_advert_unix,
+    gpsLat: row.gps_lat,
+    gpsLon: row.gps_lon,
+  });
+}
+
+/** The firmware out_path_len byte for a path of `pathBytes` bytes at
+ *  `hashSize` bytes per hop: bits 7-6 = hashSize-1, bits 5-0 = hop count; 0
+ *  for an empty (zero-hop) path. */
+export function packOutPathLen(pathBytes: number, hashSize: number): number {
+  if (pathBytes === 0) return 0;
+  return (((hashSize - 1) & 0x03) << 6) | ((pathBytes / hashSize) & 0x3f);
 }
 
 // CMD_RESET_PATH: [0x0d][32B pubkey]. Drops the contact's out_path → flood.
@@ -200,6 +264,9 @@ const CONTACTS_BULK_IDLE_MS = 10_000;
 
 export interface PendingContactByKey {
   publicKeyHex: string;
+  /** Write-order stamp (replyOrder.ts): a RESP_ERR NOT_FOUND is this lookup's
+   *  only when no older ack / admin / DM send is waiting. */
+  seq: number;
   resolve: (record: ContactRecord | null) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -371,9 +438,16 @@ export function scheduleContactsResync(ctx: FeatureContext): void {
   if (ctx.rt.contactsIter.resyncTimer) return;
   ctx.rt.contactsIter.resyncTimer = setTimeout(() => {
     ctx.rt.contactsIter.resyncTimer = null;
-    void ctx.writeFrame(encodeGetContacts()).catch((err) => {
-      ctx.log.warn(`contacts re-sync failed: ${(err as Error).message}`);
-    });
+    // RESP_ERR BAD_STATE means an enumeration is already streaming (another
+    // resync, getContacts, or the handshake): try again once it has settled.
+    void ctx
+      .writeExpectingReply(encodeGetContacts(), RESP.CONTACTS_START, (ack) => {
+        ctx.log.debug(`contacts re-sync refused (${ack.errorCode}); rescheduling`);
+        if (ack.errorCode === ERR_CODE.BAD_STATE) scheduleContactsResync(ctx);
+      })
+      .catch((err) => {
+        ctx.log.warn(`contacts re-sync failed: ${(err as Error).message}`);
+      });
   }, 1500);
 }
 
@@ -488,6 +562,7 @@ export function upsertOnRadioContact(ctx: FeatureContext, record: ContactRecord,
     lastSeenMs: bestSeenMs > 0 ? bestSeenMs : undefined,
     hops: hopsFromOutPathLen(record.outPathLen),
     favourite: (record.flags & 0x01) !== 0,
+    telemetryPerms: telemetryPermsFromFlags(record.flags),
     outPathHex: newOutPathHex || undefined,
     outPathHashSize: newOutPathHex ? newOutPathHashSize : existing?.outPathHashSize,
     preferDirect: existing?.preferDirect,
@@ -543,6 +618,9 @@ export function ingestContact(
     onRadio,
     nowMs,
     heardLive,
+    // A sync or GET_CONTACT_BY_KEY record is the radio's stored entry; a
+    // PUSH_NEW_ADVERT record has zeroed flags.
+    flagsFromRadio: source === 'sync' || opts?.onRadio === true,
   });
 
   if (onRadio) {
@@ -658,9 +736,14 @@ function resolvePendingContactByKey(ctx: FeatureContext, record: ContactRecord):
   return true;
 }
 
-/** Resolve the oldest pending getContactByKey with null. A RESP_ERR (NOT_FOUND)
- *  with no queued ack routes here from onPacket tier-3, before failOldestDmSend.
- *  Returns true when a lookup was waiting. */
+/** Write-order stamp of the oldest pending getContactByKey. */
+export function contactByKeyHeadSeq(ctx: FeatureContext): number | undefined {
+  return ctx.rt.contactsIter.pendingContactByKey[0]?.seq;
+}
+
+/** Resolve the oldest pending getContactByKey with null. The session routes a
+ *  RESP_ERR (NOT_FOUND) here when this lookup is the oldest command still
+ *  waiting for an answer. Returns true when a lookup was waiting. */
 export function failPendingContactByKey(ctx: FeatureContext): boolean {
   const entry = ctx.rt.contactsIter.pendingContactByKey.shift();
   if (!entry) return false;
@@ -679,6 +762,7 @@ export function getContactByKey(ctx: FeatureContext, destPublicKeyHex: string): 
   return new Promise<ContactRecord | null>((resolve, reject) => {
     const entry: PendingContactByKey = {
       publicKeyHex,
+      seq: nextReplySeq(ctx),
       resolve,
       timer: setTimeout(() => {
         removePendingContactByKey(ctx, entry);

@@ -111,6 +111,11 @@ export interface MeshCoreEventMap {
   autoAddConfig: (cfg: AutoAddConfig) => void;
   telemetryPolicy: (policy: TelemetryPolicy) => void;
   gpsConfig: (cfg: GpsConfig) => void;
+  /** Every RESP_CUSTOM_VARS reply, decoded: the radio's sensor settings as
+   *  `key → value`. Fires on every reply, including `{}` from a radio that
+   *  exposes no settings (no GPS hardware), so "nothing to configure" can be
+   *  told apart from "no reply". */
+  customVars: (vars: Record<string, string>) => void;
   deviceInfo: (info: DeviceInfo) => void;
   deviceCapabilities: (caps: DeviceCapabilities) => void;
 }
@@ -150,6 +155,7 @@ export const EventName = {
   AUTO_ADD_CONFIG: 'autoAddConfig',
   TELEMETRY_POLICY: 'telemetryPolicy',
   GPS_CONFIG: 'gpsConfig',
+  CUSTOM_VARS: 'customVars',
   DEVICE_INFO: 'deviceInfo',
   DEVICE_CAPABILITIES: 'deviceCapabilities',
 } as const satisfies Record<string, keyof MeshCoreEventMap>;

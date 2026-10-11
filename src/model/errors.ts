@@ -20,13 +20,18 @@ export class ContactTableFullError extends Error {
 }
 
 /** Thrown when a companion command is answered with RESP_ERR. `errorCode` is
- *  the firmware error byte (ERR_CODE_*); undefined on a bare RESP_ERR. */
+ *  the firmware error byte (ERR_CODE_*); undefined on a bare RESP_ERR.
+ *  `message` overrides the generic text when the caller knows what failed. */
 export class ProtocolError extends Error {
-  constructor(public readonly errorCode?: number) {
+  constructor(
+    public readonly errorCode?: number,
+    message?: string,
+  ) {
     super(
-      errorCode !== undefined
-        ? `radio returned error 0x${errorCode.toString(16).padStart(2, '0')}`
-        : 'radio returned an error',
+      message ??
+        (errorCode !== undefined
+          ? `radio returned error 0x${errorCode.toString(16).padStart(2, '0')}`
+          : 'radio returned an error'),
     );
     this.name = 'ProtocolError';
   }

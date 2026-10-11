@@ -154,7 +154,12 @@ export async function sendChannelText(
   const timestampUnix = Math.floor(Date.now() / 1000);
   const frame = encodeSendChannelText({ channelIdx: idx, text, timestampUnix });
   try {
-    await ctx.writeFrame(frame);
+    // The radio answers RESP_OK (or RESP_ERR NOT_FOUND for a bad slot). The
+    // sink consumes it so it can't settle another command's ack; the call
+    // still resolves on the write, so relays can be registered at once.
+    await ctx.writeAckSink(frame, (ack) => {
+      if (!ack.ok && !ack.timedOut) ctx.log.warn(`channel send on slot ${idx} rejected by radio`);
+    });
     const channelHash = channelHashOf(channel) ?? undefined;
     return { ok: true, channelHash, timestampUnix };
   } catch (err) {

@@ -88,7 +88,9 @@ export const autoAddFeature: Feature = {
 
 /** Ask the radio for its current auto-add flags (RESP_AUTOADD_CONFIG lands via the handler). */
 export async function requestAutoAddConfig(ctx: FeatureContext): Promise<void> {
-  await ctx.writeFrame(encodeGetAutoAddConfig());
+  await ctx.writeExpectingReply(encodeGetAutoAddConfig(), RESP.AUTOADD_CONFIG, (ack) => {
+    ctx.log.debug(`GET_AUTOADD_CONFIG refused (${ack.errorCode})`);
+  });
 }
 
 /** Push auto-add flags to the radio. Resolves true on RESP_OK, false on RESP_ERR/timeout. */

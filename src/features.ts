@@ -4,10 +4,15 @@
 
 export type { AdminMode } from './features/adminSessions';
 export type { AutoAddFlagsInput } from './features/autoAdd';
-export type { ContactsSyncSignal, Feature, FeatureContext } from './features/feature';
+export type { AckResult, ContactsSyncSignal, Feature, FeatureContext } from './features/feature';
 export type { DefaultFloodScope, FloodScopeInput } from './features/floodScope';
 export type { RepeatFreqRange } from './features/misc';
 export type { AdvertPath, DiscoveredPath } from './features/pathDiagnostics';
-export type { RepeaterCliOptions, RepeaterReachMode } from './features/repeaterAdmin';
+export type {
+  BinaryRequestOptions,
+  RepeaterCliOptions,
+  RepeaterReachMode,
+  RequestSentInfo,
+} from './features/repeaterAdmin';
 export type { SelfInfo } from './features/selfInfo';
 export type { TuningParams } from './features/tuning';

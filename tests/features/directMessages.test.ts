@@ -9,13 +9,19 @@ import {
   directMessagesFeature,
   encodeSendDmText,
   enqueueCliSend,
+  enqueueDmSend,
   failOldestDmSend,
   resetDmState,
   sendDmText,
   setAdminHooks,
 } from '../../src/features/directMessages';
+import type { FeatureContext } from '../../src/features/feature';
+import { nextReplySeq } from '../../src/features/replyOrder';
 import { TXT_TYPE } from '../../src/protocol/codes';
 import { addContact, type FeatureCtxHarness, makeFeatureCtx, PK } from '../support/featureCtx';
+
+/** Ids on the DM send FIFO, oldest first. */
+const queuedIds = (ctx: FeatureContext): string[] => ctx.rt.dm.dmSendQueue.map((slot) => slot.id);
 
 // ---- Pure codec tests (ported verbatim from the donor) -----------------
 
@@ -166,7 +172,7 @@ describe('directMessages: sendDmText (FIFO enqueue + write)', () => {
     addContact(state);
     const r = await sendDmText(ctx, `c:${PK}`, 'hello', 'm1');
     expect(r.ok).toBe(true);
-    expect(ctx.rt.dm.dmSendQueue).toEqual(['m1']);
+    expect(queuedIds(ctx)).toEqual(['m1']);
     expect(writes).toHaveLength(1);
     expect(writes[0][0]).toBe(0x02);
   });
@@ -195,7 +201,7 @@ describe('directMessages: RESP_SENT → sending→sent + expected-ack registrati
     const { ctx, state, messageStates } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
+    enqueueDmSend(ctx, 'm1');
 
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
 
@@ -211,7 +217,7 @@ describe('directMessages: RESP_SENT → sending→sent + expected-ack registrati
     const { ctx, state } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
+    enqueueDmSend(ctx, 'm1');
     directMessagesFeature.handle(0x06, sentFrame('00000000'), ctx);
     expect(ctx.rt.dm.pendingDmAcks.size).toBe(0);
   });
@@ -228,7 +234,8 @@ describe('directMessages: RESP_SENT → sending→sent + expected-ack registrati
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'a', ts: 1, state: 'sending' });
     state.insertMessage({ id: 'm2', key: `c:${PK}`, body: 'b', ts: 2, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1', 'm2');
+    enqueueDmSend(ctx, 'm1');
+    enqueueDmSend(ctx, 'm2');
     directMessagesFeature.handle(0x06, sentFrame('aaaa0001'), ctx); // first RESP_SENT → m1
     directMessagesFeature.handle(0x06, sentFrame('aaaa0002'), ctx); // second → m2
     expect(messageStates).toEqual([
@@ -246,7 +253,7 @@ describe('directMessages: PUSH_SEND_CONFIRMED → sent→ack lookup/clear', () =
     const { ctx, state, messageStates } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
+    enqueueDmSend(ctx, 'm1');
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
     directMessagesFeature.handle(0x82, confirmedFrame('deadbeef'), ctx);
     expect(messageStates).toContainEqual({ id: 'm1', state: 'ack' });
@@ -261,33 +268,35 @@ describe('directMessages: PUSH_SEND_CONFIRMED → sent→ack lookup/clear', () =
 });
 
 describe('directMessages: admin-hook interception order', () => {
-  it('RESP_SENT consults onSentTag FIRST and returns without touching the DM FIFO when it consumes the tag', () => {
+  it('RESP_SENT goes to the admin hook when its head is older than the DM head', () => {
     const { ctx, state, messageStates } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
+    const adminSeq = nextReplySeq(ctx); // admin send written first
+    enqueueDmSend(ctx, 'm1');
     const seen: string[] = [];
     setAdminHooks(ctx, {
-      onSentTag: (tag) => {
-        seen.push(tag);
-        return true; // admin consumes it
-      },
+      sentHeadSeq: () => adminSeq,
+      onSent: (sent) => seen.push(sent.expectedAckHex),
     });
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
     expect(seen).toEqual(['deadbeef']);
     // FIFO untouched, no DM state machine ran.
-    expect(ctx.rt.dm.dmSendQueue).toEqual(['m1']);
+    expect(queuedIds(ctx)).toEqual(['m1']);
     expect(messageStates).toHaveLength(0);
     expect(ctx.rt.dm.pendingDmAcks.size).toBe(0);
   });
 
-  it('RESP_SENT proceeds to the DM FIFO when onSentTag returns false (does not consume)', () => {
+  it('RESP_SENT goes to the DM FIFO when the DM was written before the admin send', () => {
     const { ctx, state, messageStates } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
-    setAdminHooks(ctx, { onSentTag: () => false });
+    enqueueDmSend(ctx, 'm1');
+    const adminSeq = nextReplySeq(ctx); // admin send written after the DM
+    const seen: string[] = [];
+    setAdminHooks(ctx, { sentHeadSeq: () => adminSeq, onSent: (sent) => seen.push(sent.expectedAckHex) });
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
+    expect(seen).toEqual([]);
     expect(ctx.rt.dm.dmSendQueue).toHaveLength(0);
     expect(messageStates).toContainEqual({ id: 'm1', state: 'sent' });
     resetDmState(ctx, 'cleanup');
@@ -363,9 +372,10 @@ describe('directMessages: inbound RESP_CONTACT_MSG_RECV placeholder synthesis', 
 describe('directMessages: failOldestDmSend / resetDmState', () => {
   it('failOldestDmSend fails the oldest queued id and flips it to failed', () => {
     const { ctx, messageStates } = makeCtx();
-    ctx.rt.dm.dmSendQueue.push('m1', 'm2');
+    enqueueDmSend(ctx, 'm1');
+    enqueueDmSend(ctx, 'm2');
     failOldestDmSend(ctx, 'RESP_ERR');
-    expect(ctx.rt.dm.dmSendQueue).toEqual(['m2']);
+    expect(queuedIds(ctx)).toEqual(['m2']);
     expect(messageStates).toContainEqual({ id: 'm1', state: 'failed' });
   });
 
@@ -378,7 +388,8 @@ describe('directMessages: failOldestDmSend / resetDmState', () => {
   it('resetDmState fails every queued DM and clears pending acks', () => {
     const { ctx, state, messageStates } = makeCtx();
     addContact(state);
-    ctx.rt.dm.dmSendQueue.push('m1', 'm2');
+    enqueueDmSend(ctx, 'm1');
+    enqueueDmSend(ctx, 'm2');
     directMessagesFeature.handle(0x06, sentFrame('aaaa0001'), ctx); // m1 → sent + pending ack
     expect(ctx.rt.dm.pendingDmAcks.size).toBe(1);
     resetDmState(ctx, 'disconnected');
@@ -492,7 +503,7 @@ describe('directMessages: CLI sends report on cliSendState, not messageState', (
     const { ctx, state, messageStates, cliStates } = makeCtx();
     addContact(state);
     enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
-    expect(ctx.rt.dm.dmSendQueue).toEqual(['cli-1']);
+    expect(queuedIds(ctx)).toEqual(['cli-1']);
 
     directMessagesFeature.handle(0x06, sentFrame('deadbeef'), ctx);
 
@@ -582,10 +593,10 @@ describe('directMessages: CLI sends report on cliSendState, not messageState', (
     const { ctx, state, messageStates, cliStates } = makeCtx();
     addContact(state);
     state.insertMessage({ id: 'm1', key: `c:${PK}`, body: 'hi', ts: 1, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m1');
+    enqueueDmSend(ctx, 'm1');
     enqueueCliSend(ctx, 'cli-1', { contactKey: `c:${PK}` });
     state.insertMessage({ id: 'm2', key: `c:${PK}`, body: 'yo', ts: 2, state: 'sending' });
-    ctx.rt.dm.dmSendQueue.push('m2');
+    enqueueDmSend(ctx, 'm2');
 
     directMessagesFeature.handle(0x06, sentFrame('aaaa0001'), ctx); // → m1
     directMessagesFeature.handle(0x06, sentFrame('aaaa0002'), ctx); // → cli-1

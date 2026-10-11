@@ -75,9 +75,11 @@ describe('commands issued in the same tick as start()', () => {
   it('writes requestCustomVars to the transport', async () => {
     const { session, transport } = startAlreadyConnected();
 
-    await session.requestCustomVars('gps');
-
+    const p = session.requestCustomVars('gps');
+    await Promise.resolve();
     expect(opcodes(transport)).toContain(CMD_GET_CUSTOM_VAR);
+    transport.receiveHex('15'); // RESP_CUSTOM_VARS, empty
+    await expect(p).resolves.toEqual({});
   });
 
   it('does not drive a second handshake or liveness poll', async () => {

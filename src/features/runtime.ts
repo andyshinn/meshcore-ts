@@ -7,6 +7,7 @@ import { createDrainRuntime, type DrainRuntime } from './drain';
 import { createPathDiagRuntime, type PathDiagRuntime } from './pathDiagnostics';
 import { PendingChannelSends } from './pendingChannelSends';
 import { type AdminCorrRuntime, createAdminCorrRuntime } from './repeaterAdmin';
+import { createReplyOrderRuntime, type ReplyOrderRuntime } from './replyOrder';
 
 /** Per-session mutable state, replacing every former module-level global. */
 export interface SessionRuntime {
@@ -19,6 +20,7 @@ export interface SessionRuntime {
   pathDisc: PathDiagRuntime;
   dm: DmRuntime;
   adminCorr: AdminCorrRuntime;
+  replyOrder: ReplyOrderRuntime;
 }
 
 /** Build a fresh runtime bundle for one session — every feature's per-session
@@ -34,5 +36,6 @@ export function createSessionRuntime(): SessionRuntime {
     pathDisc: createPathDiagRuntime(),
     dm: createDmRuntime(),
     adminCorr: createAdminCorrRuntime(),
+    replyOrder: createReplyOrderRuntime(),
   };
 }
