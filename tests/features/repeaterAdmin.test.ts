@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
-import { directMessagesFeature, failOldestDmSend, resetDmState } from '../../src/features/directMessages';
+import { directMessagesFeature, enqueueDmSend, failOldestDmSend, resetDmState } from '../../src/features/directMessages';
 import type { FeatureContext } from '../../src/features/feature';
 import {
   buildAnonReplyPath,
@@ -207,25 +207,21 @@ describe('repeaterAdmin: CLI command + onCliReply correlation', () => {
     expect(ctx.rt.adminCorr.pendingCli.has(PREFIX)).toBe(false);
   });
 
-  it('onSentTag consumes the RESP_SENT tag ahead of the DM FIFO', () => {
-    const { ctx } = makeCtx();
+  it('an admin send written before a DM takes the first RESP_SENT', async () => {
+    const { ctx, state } = makeCtx();
+    addContact(state);
     registerAdminHooks(ctx);
-    // Park an admin-sent awaiter (as sendBinaryReq does before its write).
-    let resolvedTag: string | null = null;
-    ctx.rt.adminCorr.adminSentQueue.push({
-      resolve: (t) => {
-        resolvedTag = t;
-      },
-      reject: () => {},
-      timer: setTimeout(() => {}, 0),
-    });
-    // RESP_SENT with expected_ack — the admin hook claims it.
+    const p = sendBinaryReq(ctx, `c:${PK}`, Buffer.from([0x05, 0x00, 0x00]));
+    enqueueDmSend(ctx, 'm1');
     const sent = Buffer.alloc(10);
     sent[0] = 0x06;
     Buffer.from('deadbeef', 'hex').copy(sent, 2);
     directMessagesFeature.handle(0x06, sent, ctx);
-    expect(resolvedTag).toBe('deadbeef');
     expect(ctx.rt.adminCorr.adminSentQueue).toHaveLength(0);
+    expect(ctx.rt.dm.dmSendQueue.map((slot) => slot.id)).toEqual(['m1']);
+    ctx.admin.resolveTag('deadbeef', Buffer.from('ok'));
+    await expect(p).resolves.toEqual(Buffer.from('ok'));
+    resetDmState(ctx, 'cleanup');
   });
 });
 
@@ -435,6 +431,7 @@ describe('repeaterAdmin: resetAdmin', () => {
   it('rejects a pending local-stats awaiter', async () => {
     const { ctx } = makeCtx();
     ctx.rt.adminCorr.pendingLocalStats = {
+      kind: 'core',
       resolve: () => {},
       reject: () => {},
       timer: setTimeout(() => {}, 0),

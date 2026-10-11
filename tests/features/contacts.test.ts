@@ -444,7 +444,10 @@ describe('contact deltas', () => {
     deliver(transport, contactFrame(pk, 'Alice'));
     const removed: string[] = [];
     session.events.on('contactRemoved', (key) => removed.push(key));
-    await session.removeContactFromRadio(pk);
+    const p = session.removeContactFromRadio(pk);
+    await Promise.resolve();
+    deliver(transport, Buffer.from([0x00])); // RESP_OK
+    await p;
     expect(removed).toEqual([`c:${pk}`]);
     expect(session.state.getContact(`c:${pk}`)).toBeNull();
   });

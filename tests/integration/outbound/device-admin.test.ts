@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { Errors } from '../../../src/index.js';
-import { deliver, lastSent, makeSession } from '../../support/harness.js';
+import { frameBuf } from '../../support/frames';
+import { deliver, flush, lastSent, makeSession } from '../../support/harness.js';
 
 const KEY = 'ab'.repeat(64); // 64-byte ed25519 expanded private key
 const RESP_OK = Buffer.from([0x00]);
@@ -35,7 +36,12 @@ describe('outbound device admin', () => {
     expect(sent?.length).toBe(65);
     expect(sent?.subarray(1).toString('hex')).toBe(KEY);
     deliver(transport, RESP_OK);
+    await flush();
+    // The import re-reads SELF_INFO so the owner reflects the new identity.
+    expect(lastSent(transport)?.[0]).toBe(0x01); // CMD_APP_START
+    deliver(transport, frameBuf('selfInfo'));
     await expect(p).resolves.toBeUndefined();
+    expect(session.state.getOwner()?.publicKeyShort).toBe('1a3d3c6a09f0');
   });
 
   it('importPrivateKey rejects Errors.ProtocolError on RESP_ERR', async () => {

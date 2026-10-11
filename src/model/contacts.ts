@@ -1,4 +1,4 @@
-import type { ContactKind, PathHashSize } from './types';
+import type { ContactKind, PathHashSize, TelemetryPerms } from './types';
 
 /** A node we've heard an advert from. Superset of the on-radio contact list:
  *  `onRadio` marks whether it is currently committed to the radio's store. */
@@ -25,6 +25,36 @@ export interface DiscoveredContact {
   firstHeardMs: number;
   onRadio: boolean;
   favourite: boolean;
+  /** Telemetry this contact may read from us (contact flags bits 1-3). */
+  telemetryPerms: TelemetryPerms;
+}
+
+/** Contact flags bit 0: favourite (protected from overwrite-oldest). */
+export const CONTACT_FLAG_FAVOURITE = 0x01;
+const CONTACT_FLAG_TELEM_BASE = 0x02;
+const CONTACT_FLAG_TELEM_LOC = 0x04;
+const CONTACT_FLAG_TELEM_ENV = 0x08;
+const CONTACT_FLAG_TELEM_MASK = CONTACT_FLAG_TELEM_BASE | CONTACT_FLAG_TELEM_LOC | CONTACT_FLAG_TELEM_ENV;
+
+/** Read the telemetry permissions out of a firmware contact flags byte. The
+ *  firmware reads them as `flags >> 1` against TELEM_PERM_BASE/LOCATION/
+ *  ENVIRONMENT (0x01/0x02/0x04). */
+export function telemetryPermsFromFlags(flags: number): TelemetryPerms {
+  return {
+    base: (flags & CONTACT_FLAG_TELEM_BASE) !== 0,
+    loc: (flags & CONTACT_FLAG_TELEM_LOC) !== 0,
+    env: (flags & CONTACT_FLAG_TELEM_ENV) !== 0,
+  };
+}
+
+/** Write telemetry permissions into a contact flags byte, keeping every other
+ *  bit (favourite, and any the firmware adds later) as it was. */
+export function flagsWithTelemetryPerms(flags: number, perms: TelemetryPerms): number {
+  const bits =
+    (perms.base ? CONTACT_FLAG_TELEM_BASE : 0) |
+    (perms.loc ? CONTACT_FLAG_TELEM_LOC : 0) |
+    (perms.env ? CONTACT_FLAG_TELEM_ENV : 0);
+  return ((flags & ~CONTACT_FLAG_TELEM_MASK) | bits) & 0xff;
 }
 
 /** Hops away, derived from a contact's stored out_path_len. This is the packed

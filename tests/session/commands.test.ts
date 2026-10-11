@@ -94,7 +94,10 @@ describe('MeshCoreSession command surface', () => {
       const seen: number[] = [];
       session.events.on('radioSettings', (s) => seen.push(s.pathHashMode));
 
-      await session.setPathHashMode(3);
+      const p = session.setPathHashMode(3);
+      await Promise.resolve();
+      transport.receive(Uint8Array.from([0x00])); // RESP_OK
+      await p;
 
       expect(transport.sent).toHaveLength(1);
       const frame = Buffer.from(transport.sent[0]);

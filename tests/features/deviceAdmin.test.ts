@@ -13,6 +13,7 @@ import {
   resetDeviceAdmin,
 } from '../../src/features/deviceAdmin';
 import type { FeatureContext } from '../../src/features/feature';
+import { createReplyOrderRuntime } from '../../src/features/replyOrder';
 import { FeatureDisabledError } from '../../src/model/errors';
 
 const hex = (b: Buffer) => b.toString('hex');
@@ -30,7 +31,7 @@ function makeCtx(): { ctx: FeatureContext; rt: DeviceAdminRuntime; writes: Buffe
     writeFrame: async (frame: Buffer) => {
       writes.push(frame);
     },
-    rt: { deviceAdmin: rt },
+    rt: { deviceAdmin: rt, replyOrder: createReplyOrderRuntime() },
   } as unknown as FeatureContext;
   return { ctx, rt, writes };
 }

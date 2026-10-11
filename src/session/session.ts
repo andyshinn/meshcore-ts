@@ -9,14 +9,18 @@ import * as channels from '../features/channels';
 import * as contactInterop from '../features/contactInterop';
 import {
   closeContactsBulk,
+  contactByKeyHeadSeq,
+  contactRecordFlags,
   contactsFeature,
   emitDiscovered,
   encodeAddUpdateContact,
+  encodeContactRecordRewrite,
   encodeGetContacts,
   encodeRemoveContact,
   encodeResetPath,
   failPendingContactByKey,
   getContactByKey,
+  packOutPathLen,
   removeContact,
   resetContactsIter,
   scheduleContactsResync,
@@ -24,12 +28,18 @@ import {
   upsertOnRadioContact,
 } from '../features/contacts';
 import { contactsFullFeature } from '../features/contactsFull';
-import { customVarsFeature, encodeGetCustomVar, encodeSetCustomVar } from '../features/customVars';
+import {
+  applyCustomVars,
+  customVarsFeature,
+  encodeGetCustomVar,
+  encodeSetCustomVar,
+  foldGpsVars,
+} from '../features/customVars';
 import * as deviceAdmin from '../features/deviceAdmin';
 import { deviceInfoFeature, encodeDeviceQuery } from '../features/deviceInfo';
 import * as directMessages from '../features/directMessages';
 import { drainFeature, resetDrain, scheduleDrain } from '../features/drain';
-import type { ContactsSyncSignal, FeatureContext } from '../features/feature';
+import type { AckResult, ContactsSyncSignal, FeatureContext } from '../features/feature';
 import * as floodScope from '../features/floodScope';
 import * as misc from '../features/misc';
 import * as pathDiagnostics from '../features/pathDiagnostics';
@@ -38,16 +48,32 @@ import { encodeSetRadioParams, encodeSetRadioTxPower } from '../features/radioPa
 import * as rawData from '../features/rawData';
 import { FeatureRegistry } from '../features/registry';
 import * as repeaterAdmin from '../features/repeaterAdmin';
+import { nextReplySeq, oldestSeq } from '../features/replyOrder';
 import { createSessionRuntime, type SessionRuntime } from '../features/runtime';
 import { applySelfInfo, encodeAppStart, type SelfInfo, selfInfoFeature } from '../features/selfInfo';
 import * as signing from '../features/signing';
 import { getDeviceTime, setDeviceTime, syncDeviceTime } from '../features/time';
 import { getTuningParams, setTuningParams, type TuningParams } from '../features/tuning';
-import { contactKindToAdvType, hashSizeFromOutPathLen } from '../model/contacts';
+import { contactKindToAdvType, flagsWithTelemetryPerms } from '../model/contacts';
 import type { ContactRecord } from '../model/contactTypes';
-import { ContactTableFullError, ProtocolError, ProtocolTimeoutError, UnknownContactError } from '../model/errors';
+import {
+  ContactTableFullError,
+  FeatureDisabledError,
+  ProtocolError,
+  ProtocolTimeoutError,
+  UnknownContactError,
+} from '../model/errors';
+import type { DiscoveredRow } from '../model/state/discoveredStore';
 import { SessionState } from '../model/state/model';
-import type { Channel, Contact, RawPacket, SyncProgress, TransportState } from '../model/types';
+import type {
+  Channel,
+  Contact,
+  PathHashSize,
+  RawPacket,
+  SyncProgress,
+  TelemetryPerms,
+  TransportState,
+} from '../model/types';
 import { DEFAULT_SYNC_PROGRESS } from '../model/types';
 import { MeshCoreEvents } from '../ports/events';
 import { type Logger, noopLogger } from '../ports/logger';
@@ -99,16 +125,20 @@ const LIVENESS_POLL_MS = 60_000;
 // Default wait for a typed RESP_* reply to a feature ctx.request({ expect }).
 const REQUEST_TIMEOUT_MS = 5_000;
 
-export interface AckResult {
-  ok: boolean;
-  /** Firmware error code byte from a RESP_ERR reply (frame[1]); undefined on
-   *  RESP_OK or on timeout. */
-  errorCode?: number;
-}
-
 interface PendingAck {
   resolve: (result: AckResult) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Write-order stamp (features/replyOrder.ts). */
+  seq: number;
+  /** The command can't be answered RESP_OK (it has a typed reply, and only a
+   *  RESP_ERR stands in for it), so a RESP_OK skips this entry. */
+  errOnly?: boolean;
+  /** A frame with this code also answers the command, settling the entry. */
+  answeredBy?: number;
+  /** When `answeredBy` arrives: whether it counts as success, and whether the
+   *  frame stops there (true) or still goes on to its feature handler. */
+  answerOk?: boolean;
+  consumeAnswer?: boolean;
 }
 
 // Awaiter for a solicited typed reply (a GET command's RESP_* frame), keyed by
@@ -117,7 +147,14 @@ interface PendingTyped {
   resolve: (frame: Buffer) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** Write-order stamp (features/replyOrder.ts). */
+  seq: number;
+  /** When set, only a frame this accepts is this waiter's reply. */
+  match?: (frame: Buffer) => boolean;
 }
+
+/** What a typed request's write got back: its typed reply, or RESP_OK/ERR. */
+type TypedOrAck = { frame: Buffer } | { ack: AckResult };
 
 export interface MeshCoreSessionOptions {
   transport: Transport;
@@ -219,8 +256,11 @@ export class MeshCoreSession {
     this.rt = createSessionRuntime();
     this.ctx = {
       writeFrame: (frame) => this.writeFrame(frame),
+      writeAckSink: (frame, onAck) => this.writeAckSink(frame, onAck),
+      writeExpectingReply: (frame, replyCode, onErr) => this.writeExpectingReply(frame, replyCode, onErr),
       request: (frame, reqOpts) => this.request(frame, reqOpts),
       requestOrNull: (frame, expect, timeoutMs) => this.requestOrNull(frame, expect, timeoutMs),
+      requestOrError: (frame, expect, reqOpts) => this.requestOrError(frame, expect, reqOpts),
       events: this.events,
       state: this.state,
       log: this.log,
@@ -350,13 +390,21 @@ export class MeshCoreSession {
   }
 
   /** Generic send→await for feature modules. See FeatureContext.request. */
-  private async request(frame: Buffer, opts?: { expect?: number; timeoutMs?: number }): Promise<Buffer> {
+  private async request(
+    frame: Buffer,
+    opts?: { expect?: number; timeoutMs?: number; orDisabled?: boolean },
+  ): Promise<Buffer> {
     if (opts?.expect === undefined) {
       // RESP_OK / RESP_ERR path — reuse the shared, correlation-id-less ack FIFO
       // (see the pendingAcks field comment): concurrent OK/ERR writers can
       // cross-resolve, so callers must serialize. A timeout surfaces here as
       // ProtocolError(undefined) — indistinguishable from a real bare RESP_ERR.
       const { promise, entry } = this.awaitAck(opts?.timeoutMs ?? REQUEST_TIMEOUT_MS);
+      if (opts?.orDisabled) {
+        entry.answeredBy = RESP.DISABLED;
+        entry.answerOk = false;
+        entry.consumeAnswer = true;
+      }
       try {
         await this.writeFrame(frame);
       } catch (err) {
@@ -364,6 +412,7 @@ export class MeshCoreSession {
         throw err;
       }
       const ack = await promise;
+      if (ack.answeredBy === RESP.DISABLED) throw new FeatureDisabledError();
       if (!ack.ok) throw new ProtocolError(ack.errorCode);
       return Buffer.alloc(0);
     }
@@ -374,42 +423,65 @@ export class MeshCoreSession {
     if (expect === RESP.OK || expect === RESP.ERR) {
       throw new Error('request({ expect }) cannot await RESP_OK/RESP_ERR — omit `expect`');
     }
-    const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-    return new Promise<Buffer>((resolve, reject) => {
-      const queue = this.pendingTyped.get(expect) ?? [];
-      const remove = () => {
-        const q = this.pendingTyped.get(expect);
-        if (!q) return;
-        const i = q.indexOf(entry);
-        if (i !== -1) q.splice(i, 1);
-        if (q.length === 0) this.pendingTyped.delete(expect);
-      };
-      const timer = setTimeout(() => {
-        remove();
-        reject(new ProtocolTimeoutError(expect));
-      }, timeoutMs);
-      const entry: PendingTyped = { resolve, reject, timer };
-      queue.push(entry);
-      this.pendingTyped.set(expect, queue);
-      this.writeFrame(frame).catch((err) => {
-        clearTimeout(timer);
-        remove();
-        reject(err as Error);
-      });
-    });
+    // A RESP_ERR answers in place of the typed reply (e.g. ERR_CODE_UNSUPPORTED_CMD
+    // from firmware without the command), so it rejects here rather than
+    // waiting out the timeout or being credited to another command.
+    const reply = await this.requestTypedOrAck(frame, expect, opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
+    if ('frame' in reply) return reply.frame;
+    throw new ProtocolError(reply.ack.errorCode);
   }
 
   /** Send a frame and resolve EITHER its typed reply (code === expect) OR null
-   *  on a RESP_ERR. Arms a typed-reply waiter and an ack waiter against one
-   *  write so a "not found" RESP_ERR is consumed via the ack FIFO (never leaking
-   *  to failOldestDmSend) rather than waiting out the typed-reply timeout. The
-   *  two waiters share a timer and a settle guard; whichever fires first removes
-   *  the other. See FeatureContext.requestOrNull. */
-  private requestOrNull(frame: Buffer, expect: number, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<Buffer | null> {
+   *  on a RESP_ERR. See FeatureContext.requestOrNull. */
+  private async requestOrNull(
+    frame: Buffer,
+    expect: number,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<Buffer | null> {
     if (expect === RESP.OK || expect === RESP.ERR) {
-      return Promise.reject(new Error('requestOrNull cannot expect RESP_OK/RESP_ERR — they resolve to null'));
+      throw new Error('requestOrNull cannot expect RESP_OK/RESP_ERR — they resolve to null');
     }
-    return new Promise<Buffer | null>((resolve, reject) => {
+    const reply = await this.requestTypedOrAck(frame, expect, timeoutMs);
+    return 'frame' in reply ? reply.frame : null;
+  }
+
+  /** Send a frame and resolve its typed reply, rejecting ProtocolError on a
+   *  RESP_ERR. See FeatureContext.requestOrError. */
+  private async requestOrError(
+    frame: Buffer,
+    expect: number,
+    opts: { timeoutMs?: number; match?: (frame: Buffer) => boolean; onReply?: (frame: Buffer) => void } = {},
+  ): Promise<Buffer> {
+    if (expect === RESP.OK || expect === RESP.ERR) {
+      throw new Error('requestOrError cannot expect RESP_OK/RESP_ERR — omit `expect` and use request()');
+    }
+    const reply = await this.requestTypedOrAck(
+      frame,
+      expect,
+      opts.timeoutMs ?? REQUEST_TIMEOUT_MS,
+      opts.match,
+      opts.onReply,
+    );
+    if ('frame' in reply) return reply.frame;
+    throw new ProtocolError(reply.ack.errorCode);
+  }
+
+  /** Arm a typed-reply waiter and an ack waiter against one write, so the
+   *  command's answer is caught whichever form it takes: its typed reply, or a
+   *  RESP_ERR consumed via the ack FIFO (never leaking to another command)
+   *  rather than waiting out the typed-reply timeout. A typed command is never
+   *  answered RESP_OK, so the ack waiter is `errOnly`: a RESP_OK passes it by
+   *  for the next ack waiter. The two waiters share one write-order stamp, a
+   *  timer and a settle guard; whichever fires first removes the other.
+   *  Rejects ProtocolTimeoutError on timeout, or the write error. */
+  private requestTypedOrAck(
+    frame: Buffer,
+    expect: number,
+    timeoutMs: number,
+    match?: (frame: Buffer) => boolean,
+    onReply?: (frame: Buffer) => void,
+  ): Promise<TypedOrAck> {
+    return new Promise<TypedOrAck>((resolve, reject) => {
       let settled = false;
       const removeTyped = () => {
         const q = this.pendingTyped.get(expect);
@@ -429,16 +501,19 @@ export class MeshCoreSession {
         removeAck();
         reject(new ProtocolTimeoutError(expect));
       }, timeoutMs);
-      // RESP_OK / RESP_ERR routes here via the ack FIFO → resolve null.
+      const seq = nextReplySeq(this);
+      // RESP_OK / RESP_ERR routes here via the ack FIFO.
       const ackEntry: PendingAck = {
-        resolve: () => {
+        resolve: (ack) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           removeTyped();
-          resolve(null);
+          resolve({ ack });
         },
         timer,
+        seq,
+        errOnly: true,
       };
       // The typed reply (the success case) routes here via pendingTyped.
       const typedEntry: PendingTyped = {
@@ -447,7 +522,12 @@ export class MeshCoreSession {
           settled = true;
           clearTimeout(timer);
           removeAck();
-          resolve(f);
+          try {
+            onReply?.(f);
+          } catch (err) {
+            this.log.warn(`onReply threw: ${(err as Error).message}`);
+          }
+          resolve({ frame: f });
         },
         reject: (err: Error) => {
           if (settled) return;
@@ -457,6 +537,8 @@ export class MeshCoreSession {
           reject(err);
         },
         timer,
+        seq,
+        match,
       };
       this.pendingAcks.push(ackEntry);
       const queue = this.pendingTyped.get(expect) ?? [];
@@ -549,12 +631,34 @@ export class MeshCoreSession {
     const frame = Buffer.from(p.bytes);
     this.log.trace(`rx code=0x${code.toString(16).padStart(2, '0')} (${p.codeName ?? '?'}) len=${frame.length}`);
 
-    // (1) Solicited typed replies (ctx.request with `expect`) get first crack.
+    // (0) A typed frame that also answers a waiting command in the ack FIFO
+    //     (writeExpectingReply, request's `orDisabled`) frees that command's
+    //     slot, oldest first.
+    const answered = this.pendingAcks.findIndex((e) => e.answeredBy === code);
+    // RESP_DISABLED also answers a key export, which has its own queue: an
+    // export written before the import owns it.
+    const exportSeq = code === RESP.DISABLED ? deviceAdmin.exportHeadSeq(this.ctx) : undefined;
+    if (answered !== -1 && (exportSeq === undefined || this.pendingAcks[answered].seq < exportSeq)) {
+      const entry = this.pendingAcks[answered];
+      this.pendingAcks.splice(answered, 1);
+      clearTimeout(entry.timer);
+      entry.resolve({ ok: entry.answerOk ?? true, answeredBy: code });
+      if (entry.consumeAnswer) return;
+    }
+
+    // (1) Solicited typed replies (ctx.request with `expect`) get first crack:
+    //     the oldest waiter for this code whose `match` (if any) accepts it.
+    //     RESP_SENT is also the answer to admin and DM sends, so a RESP_SENT
+    //     waiter takes it only when it sent the oldest command still waiting
+    //     for one; otherwise it falls through to directMessages, which picks
+    //     between those two queues the same way.
     const typedQueue = this.pendingTyped.get(code);
     if (typedQueue && typedQueue.length > 0) {
-      const entry = typedQueue.shift();
-      if (typedQueue.length === 0) this.pendingTyped.delete(code);
-      if (entry) {
+      const i = typedQueue.findIndex((e) => !e.match || e.match(frame));
+      const entry = i === -1 ? undefined : typedQueue[i];
+      if (entry && (code !== RESP.SENT || this.typedOwnsSent(entry))) {
+        typedQueue.splice(i, 1);
+        if (typedQueue.length === 0) this.pendingTyped.delete(code);
         clearTimeout(entry.timer);
         entry.resolve(frame);
         return;
@@ -568,27 +672,54 @@ export class MeshCoreSession {
     }
 
     // (3) The shared RESP_OK / RESP_ERR ack channel. These have no correlation
-    //     id and aren't owned by any single feature — they route to the oldest
-    //     queued device-write awaiter (the pendingAcks FIFO that backs every
-    //     ctx.request()). A RESP_ERR carries an error-code byte (frame[1]) so
-    //     callers like addContactToRadio can detect ERR_CODE_TABLE_FULL. If no
-    //     awaiter is queued, a bare RESP_ERR means the radio rejected an
-    //     in-flight send — fail the oldest DM. Any other unclaimed code is a
-    //     no-op (e.g. a reply to a command we don't issue yet).
-    if (code === RESP.OK || code === RESP.ERR) {
+    //     id and aren't owned by any single feature. RESP_OK routes to the
+    //     oldest queued device-write awaiter (the pendingAcks FIFO that backs
+    //     every ctx.request()). RESP_ERR can also be the answer to an admin
+    //     send, a DM send or a getContactByKey lookup instead of their usual
+    //     reply, so it routes to whichever of those queues holds the oldest
+    //     command still waiting (see features/replyOrder.ts). A RESP_ERR
+    //     carries an error-code byte (frame[1]) so callers like
+    //     addContactToRadio can detect ERR_CODE_TABLE_FULL. Any other unclaimed
+    //     code is a no-op (e.g. a reply to a command we don't issue yet).
+    if (code === RESP.OK) {
+      if (!this.resolveNextAck(true)) this.log.debug('unclaimed RESP_OK');
+      return;
+    }
+    if (code === RESP.ERR) {
       // A truncated/bare one-byte RESP_ERR carries no error byte — read frame[1]
       // only when present so we pass `undefined` explicitly (matching ProtocolError's
       // bare-RESP_ERR semantics) rather than relying on an out-of-bounds read.
-      const errorCode = code === RESP.ERR && frame.length >= 2 ? frame[1] : undefined;
-      if (this.resolveNextAck(code === RESP.OK, errorCode)) return;
-      if (code === RESP.ERR) {
-        // A getContactByKey miss (RESP_ERR NOT_FOUND) has no queued ack; resolve
-        // it null before treating an unclaimed RESP_ERR as a rejected DM send.
-        if (failPendingContactByKey(this.ctx)) return;
-        directMessages.failOldestDmSend(this.ctx, 'radio rejected send');
-      }
+      this.routeErr(frame.length >= 2 ? frame[1] : undefined);
     }
   };
+
+  /** Hand a RESP_ERR to the queue holding the oldest command still waiting for
+   *  an answer. */
+  private routeErr(errorCode: number | undefined): void {
+    const ackSeq = this.pendingAcks[0]?.seq;
+    const adminSeq = repeaterAdmin.adminSentHeadSeq(this.ctx);
+    const dmSeq = directMessages.dmSendHeadSeq(this.ctx);
+    const lookupSeq = contactByKeyHeadSeq(this.ctx);
+    const oldest = oldestSeq(ackSeq, adminSeq, dmSeq, lookupSeq);
+    if (oldest === undefined) {
+      this.log.debug(`unclaimed RESP_ERR (${repeaterAdmin.describeErrCode(errorCode)})`);
+    } else if (oldest === ackSeq) {
+      this.resolveNextAck(false, errorCode);
+    } else if (oldest === adminSeq) {
+      repeaterAdmin.failOldestAdminSend(this.ctx, errorCode);
+    } else if (oldest === lookupSeq) {
+      failPendingContactByKey(this.ctx);
+    } else {
+      directMessages.failOldestDmSend(this.ctx, 'radio rejected send');
+    }
+  }
+
+  /** True when a typed RESP_SENT waiter sent an older command than the admin
+   *  and DM send heads, so the RESP_SENT in hand is its reply. */
+  private typedOwnsSent(entry: PendingTyped): boolean {
+    const other = oldestSeq(repeaterAdmin.adminSentHeadSeq(this.ctx), directMessages.dmSendHeadSeq(this.ctx));
+    return other === undefined || entry.seq < other;
+  }
 
   private onTransportState = (state: TransportState): void => {
     const wasConnected = this.connected;
@@ -638,6 +769,17 @@ export class MeshCoreSession {
     this.rt.meshObs.clear();
     channels.clearPresence(this.ctx);
     this.updateSyncProgress({ ...DEFAULT_SYNC_PROGRESS });
+    // Fail any typed-reply awaiters (ctx.request with `expect`) so feature GETs
+    // reject promptly on disconnect instead of waiting out their timeout. This
+    // runs before the ack teardown below: a typed request also holds an ack
+    // waiter, and must reject with `reason`, not as a refusal.
+    for (const queue of this.pendingTyped.values()) {
+      for (const entry of queue) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error(reason));
+      }
+    }
+    this.pendingTyped.clear();
     // Resolve any in-flight acks as failures rather than leaving callers hung.
     for (const p of this.pendingAcks.splice(0)) {
       clearTimeout(p.timer);
@@ -648,19 +790,13 @@ export class MeshCoreSession {
     directMessages.resetDmState(this.ctx, reason);
     // Fail in-flight admin awaiters + drop login sessions.
     repeaterAdmin.resetAdmin(this.ctx, reason);
+    // Resolve in-flight getContactByKey lookups as misses. Left queued, their
+    // pre-disconnect stamps would claim the first RESP_ERR after a reconnect.
+    while (failPendingContactByKey(this.ctx));
     // Fail any in-flight private-key export awaiter.
     deviceAdmin.resetDeviceAdmin(this.ctx, reason);
     // Fail any in-flight path-discovery awaiter.
     pathDiagnostics.resetPathDiagnostics(this.ctx, reason);
-    // Fail any typed-reply awaiters (ctx.request with `expect`) so feature GETs
-    // reject promptly on disconnect instead of waiting out their timeout.
-    for (const queue of this.pendingTyped.values()) {
-      for (const entry of queue) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error(reason));
-      }
-    }
-    this.pendingTyped.clear();
     // Resolve any in-flight contact-stream waiters (getContacts / handshake) so
     // they return promptly on disconnect instead of riding out the watchdog.
     this.resolveWaiter('contactsStartWaiter');
@@ -702,9 +838,9 @@ export class MeshCoreSession {
       const timer = setTimeout(() => {
         const i = this.pendingAcks.indexOf(entry);
         if (i !== -1) this.pendingAcks.splice(i, 1);
-        resolve({ ok: false });
+        resolve({ ok: false, timedOut: true });
       }, timeoutMs);
-      entry = { resolve, timer };
+      entry = { resolve, timer, seq: nextReplySeq(this) };
       this.pendingAcks.push(entry);
     });
     return { promise, entry };
@@ -719,12 +855,45 @@ export class MeshCoreSession {
     clearTimeout(entry.timer);
   }
 
+  /** Settle the oldest ack waiter that can take this answer: any waiter for a
+   *  RESP_ERR (routeErr has already checked it is the oldest command), the
+   *  oldest non-`errOnly` waiter for a RESP_OK. */
   private resolveNextAck(ok: boolean, errorCode?: number): boolean {
-    const entry = this.pendingAcks.shift();
+    const i = ok ? this.pendingAcks.findIndex((e) => !e.errOnly) : 0;
+    const entry = i === -1 ? undefined : this.pendingAcks[i];
     if (!entry) return false;
+    this.pendingAcks.splice(i, 1);
     clearTimeout(entry.timer);
     entry.resolve({ ok, errorCode });
     return true;
+  }
+
+  /** See FeatureContext.writeExpectingReply. */
+  private async writeExpectingReply(frame: Buffer, replyCode: number, onErr?: (ack: AckResult) => void): Promise<void> {
+    const { promise, entry } = this.awaitAck(REQUEST_TIMEOUT_MS);
+    entry.errOnly = true;
+    entry.answeredBy = replyCode;
+    void promise.then((ack) => {
+      if (!ack.ok && !ack.timedOut) onErr?.(ack);
+    });
+    try {
+      await this.writeFrame(frame);
+    } catch (err) {
+      this.popPendingAck(entry);
+      throw err;
+    }
+  }
+
+  /** See FeatureContext.writeAckSink. */
+  private async writeAckSink(frame: Buffer, onAck?: (ack: AckResult) => void): Promise<void> {
+    const { promise, entry } = this.awaitAck(REQUEST_TIMEOUT_MS);
+    void promise.then((ack) => onAck?.(ack));
+    try {
+      await this.writeFrame(frame);
+    } catch (err) {
+      this.popPendingAck(entry);
+      throw err;
+    }
   }
 
   private startLivenessPoll(): void {
@@ -822,13 +991,20 @@ export class MeshCoreSession {
       // very fast END_OF_CONTACTS can't race past us.
       const contactsStart = this.armWaiter('contactsStartWaiter', CONTACTS_START_WAIT_MS);
       const contactsDone = this.armWaiter('contactsDoneWaiter', CONTACTS_DONE_WAIT_MS);
-      await this.writeFrame(encodeGetContacts());
+      await this.ctx.writeExpectingReply(encodeGetContacts(), RESP.CONTACTS_START, (ack) => {
+        this.log.warn(`handshake GET_CONTACTS refused: ${repeaterAdmin.describeErrCode(ack.errorCode)}`);
+      });
       await contactsStart;
       await sleep(WRITE_GAP_MS);
       // Enumerate channels. Empty slots return RESP_ERR or an all-zero key
       // RESP_CHANNEL_INFO; both are filtered by decodeChannelInfo / channelsFeature.
       for (let i = 0; i < CHANNEL_SLOT_COUNT; i += 1) {
-        await this.writeFrame(channels.encodeGetChannel(i));
+        // Not awaited: the loop keeps its write pacing. getChannel holds a
+        // stamped reply slot, so the RESP_ERR NOT_FOUND a slot past the
+        // firmware's MAX_GROUP_CHANNELS answers with is consumed here.
+        channels.getChannel(this.ctx, i).catch((err) => {
+          this.log.debug(`handshake GET_CHANNEL ${i}: ${(err as Error).message}`);
+        });
         await sleep(WRITE_GAP_MS);
         this.updateSyncProgress({
           channels: { done: i + 1, total: CHANNEL_SLOT_COUNT },
@@ -941,9 +1117,13 @@ export class MeshCoreSession {
   // ---- Path management ---------------------------------------------------
 
   /** Write a contact's out_path back to the radio so the firmware uses it for
-   *  future source-routed sends. Round-trips the contact's current type/flags/
-   *  name (firmware *replaces* on update, not merges). On RESP_OK, updates
-   *  local state with the new path + `pathManual`. */
+   *  future source-routed sends. CMD_ADD_UPDATE_CONTACT *replaces* the record,
+   *  so every other field — type, flags (favourite + telemetry permissions),
+   *  name, last advert, position — is carried through from the radio's last
+   *  report. Awaits the radio's RESP_OK and rejects with ProtocolError when it
+   *  refuses; on success updates local state with the new path + `pathManual`.
+   *  An empty `outPathHex` sets a zero-hop direct path; use resetContactPath
+   *  for flood. */
   async setContactPath(
     contactKey: string,
     outPathHex: string,
@@ -963,15 +1143,22 @@ export class MeshCoreSession {
     if (pathBytes % hashSize !== 0) {
       throw new Error(`outPathHex length ${pathBytes}B must be a multiple of pathHashMode ${hashSize}B`);
     }
-    const frame = encodeAddUpdateContact({
-      publicKeyHex: contact.publicKeyHex,
-      advType: contactKindToAdvType(contact.kind),
-      flags: 0,
-      outPathHex,
-      outPathHashSize: outPathHex ? hashSize : undefined,
-      name: contact.name,
-    });
-    await this.writeFrame(frame);
+    const outPathHashSize = outPathHex ? hashSize : undefined;
+    const row = this.state.discovered.get(contact.publicKeyHex);
+    const ack = row
+      ? await this.writeContactRecord(row, { outPathHex, outPathHashSize })
+      : await this.writeAckedFrame(
+          encodeAddUpdateContact({
+            publicKeyHex: contact.publicKeyHex,
+            advType: contactKindToAdvType(contact.kind),
+            flags: contactRecordFlags(this.ctx, contact),
+            outPathHex,
+            outPathHashSize,
+            name: contact.name,
+          }),
+        );
+    if (!ack.ok) throw this.ackError(ack, 'set contact path');
+    this.state.discovered.setOutPath(contact.publicKeyHex, packOutPathLen(pathBytes, hashSize), outPathHex);
     upsertContact(this.ctx, {
       ...contact,
       outPathHex: outPathHex || undefined,
@@ -979,11 +1166,14 @@ export class MeshCoreSession {
       preferDirect: opts.preferDirect ?? contact.preferDirect,
       pathManual: opts.manual,
       pathLearnedAt: opts.manual ? contact.pathLearnedAt : Date.now(),
-      hops: outPathHex ? pathBytes / hashSize : undefined,
+      // An empty path is a zero-hop direct route, not flood.
+      hops: pathBytes / hashSize,
     });
   }
 
-  /** Drop a contact's path back to flood. Mirrors CMD_RESET_PATH. */
+  /** Drop a contact's path back to flood (CMD_RESET_PATH). Awaits the radio's
+   *  RESP_OK and rejects (ProtocolError, or ProtocolTimeoutError) without
+   *  touching local state when it doesn't confirm. */
   async resetContactPath(contactKey: string): Promise<void> {
     const state = this.state;
     const contact = state.getContact(contactKey);
@@ -991,7 +1181,9 @@ export class MeshCoreSession {
     if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
       throw new Error(`contact ${contactKey} has no full 32B public key`);
     }
-    await this.writeFrame(encodeResetPath(contact.publicKeyHex));
+    const ack = await this.writeAckedFrame(encodeResetPath(contact.publicKeyHex));
+    if (!ack.ok) throw this.ackError(ack, 'reset contact path');
+    this.state.discovered.setOutPath(contact.publicKeyHex, 0xff, '');
     upsertContact(this.ctx, {
       ...contact,
       outPathHex: undefined,
@@ -1010,27 +1202,10 @@ export class MeshCoreSession {
       this.log.warn(`unknown discovered contact ${publicKeyHex.slice(0, 12)}`);
       throw new UnknownContactError(publicKeyHex);
     }
-    const hasFix = row.gps_lat !== 0 || row.gps_lon !== 0;
-    const frame = encodeAddUpdateContact({
-      publicKeyHex,
-      advType: row.type,
-      flags: row.flags,
-      outPathHex: row.out_path_len === 0xff ? '' : row.out_path_hex,
-      outPathHashSize: hashSizeFromOutPathLen(row.out_path_len),
-      name: row.name,
-      ...(hasFix ? { gpsLat: row.gps_lat, gpsLon: row.gps_lon, lastAdvertUnix: row.last_advert_unix } : {}),
-    });
     // Await the radio's reply before claiming the contact is on-radio. RESP_ERR
     // with ERR_CODE_TABLE_FULL means the store is full — surface it and leave
     // on_radio untouched rather than lying to the UI.
-    const ack = this.awaitAck();
-    try {
-      await this.writeFrame(frame);
-    } catch (err) {
-      this.popPendingAck(ack.entry);
-      throw err;
-    }
-    const result = await ack.promise;
+    const result = await this.writeContactRecord(row);
     if (!result.ok) {
       if (result.errorCode === ERR_CODE.TABLE_FULL) {
         this.log.warn(`add contact rejected: contact table full ${publicKeyHex.slice(0, 12)}`);
@@ -1058,7 +1233,9 @@ export class MeshCoreSession {
   /** Delete a contact from the radio's store (CMD_REMOVE_CONTACT). Keeps it in
    *  the discovered pool, flagged off-radio. */
   async removeContactFromRadio(publicKeyHex: string): Promise<void> {
-    await this.writeFrame(encodeRemoveContact(publicKeyHex));
+    const ack = await this.writeAckedFrame(encodeRemoveContact(publicKeyHex));
+    // NOT_FOUND: the radio doesn't hold it, which is the state we wanted.
+    if (!ack.ok && ack.errorCode !== ERR_CODE.NOT_FOUND) throw this.ackError(ack, 'remove contact');
     this.state.discovered.setOnRadio(publicKeyHex, false);
     removeContact(this.ctx, `c:${publicKeyHex}`);
     emitDiscovered(this.ctx);
@@ -1066,7 +1243,9 @@ export class MeshCoreSession {
 
   /** Toggle the favourite flag (contact flags bit 0). For on-radio contacts,
    *  round-trips CMD_ADD_UPDATE_CONTACT so the firmware persists the flag
-   *  (protects from overwrite-oldest). Discovered-only contacts update locally. */
+   *  (protects from overwrite-oldest), awaiting the radio's RESP_OK; rejects
+   *  with ProtocolError when it refuses. Discovered-only contacts update
+   *  locally. */
   async setContactFavourite(publicKeyHex: string, favourite: boolean): Promise<void> {
     const row = this.state.discovered.get(publicKeyHex);
     if (!row) {
@@ -1075,17 +1254,8 @@ export class MeshCoreSession {
     }
     if (row.on_radio !== 0) {
       const flags = favourite ? row.flags | 0x01 : row.flags & ~0x01;
-      const hasFix = row.gps_lat !== 0 || row.gps_lon !== 0;
-      const frame = encodeAddUpdateContact({
-        publicKeyHex,
-        advType: row.type,
-        flags,
-        outPathHex: row.out_path_len === 0xff ? '' : row.out_path_hex,
-        outPathHashSize: hashSizeFromOutPathLen(row.out_path_len),
-        name: row.name,
-        ...(hasFix ? { gpsLat: row.gps_lat, gpsLon: row.gps_lon, lastAdvertUnix: row.last_advert_unix } : {}),
-      });
-      await this.writeFrame(frame);
+      const ack = await this.writeContactRecord(row, { flags });
+      if (!ack.ok) throw this.ackError(ack, 'set favourite');
     }
     this.state.discovered.setFavourite(publicKeyHex, favourite);
     const state = this.state;
@@ -1094,6 +1264,79 @@ export class MeshCoreSession {
       upsertContact(this.ctx, { ...existing, favourite });
     }
     emitDiscovered(this.ctx);
+  }
+
+  /** Set which telemetry a contact may read from this radio (contact flags
+   *  bits 1-3: base, location, environment). The radio consults these only for
+   *  a group whose telemetry mode is 1 (allow per contact; see
+   *  TelemetryPolicy). `contactKey` is `c:<publicKeyHex>` or the bare key.
+   *
+   *  For an on-radio contact, rewrites the record with CMD_ADD_UPDATE_CONTACT,
+   *  carrying the favourite bit and every other field through unchanged, and
+   *  resolves true on RESP_OK, false on RESP_ERR / timeout / no radio. A
+   *  discovered-only contact updates locally (resolves true); the permissions
+   *  go to the radio when it is added. Throws UnknownContactError for a key not
+   *  in the discovered pool. On success, emits `contactUpserted` + `contacts`
+   *  (on-radio contacts) and `discovered`. */
+  async setContactTelemetryPerms(contactKey: string, perms: TelemetryPerms): Promise<boolean> {
+    const publicKeyHex = (contactKey.startsWith('c:') ? contactKey.slice(2) : contactKey).toLowerCase();
+    const row = this.state.discovered.get(publicKeyHex);
+    if (!row) {
+      this.log.warn(`unknown discovered contact ${publicKeyHex.slice(0, 12)}`);
+      throw new UnknownContactError(publicKeyHex);
+    }
+    const next: TelemetryPerms = { base: perms.base, loc: perms.loc, env: perms.env };
+    const flags = flagsWithTelemetryPerms(row.flags, next);
+    if (row.on_radio !== 0) {
+      if (!this.isCommandable()) return false;
+      let ack: AckResult;
+      try {
+        ack = await this.writeContactRecord(row, { flags });
+      } catch (err) {
+        this.log.warn(`setContactTelemetryPerms write failed: ${(err as Error).message}`);
+        return false;
+      }
+      if (!ack.ok) {
+        this.log.warn(
+          `setContactTelemetryPerms not confirmed for ${publicKeyHex.slice(0, 12)}: ${repeaterAdmin.describeErrCode(ack.errorCode)}`,
+        );
+        return false;
+      }
+    }
+    this.state.discovered.setFlags(publicKeyHex, flags);
+    const existing = this.state.getContact(`c:${publicKeyHex}`);
+    if (existing) upsertContact(this.ctx, { ...existing, telemetryPerms: next });
+    emitDiscovered(this.ctx);
+    return true;
+  }
+
+  /** Rewrite a contact's whole on-radio record (CMD_ADD_UPDATE_CONTACT) and
+   *  await the radio's RESP_OK / RESP_ERR. See encodeContactRecordRewrite. */
+  private writeContactRecord(
+    row: DiscoveredRow,
+    patch: { flags?: number; outPathHex?: string; outPathHashSize?: PathHashSize } = {},
+  ): Promise<AckResult> {
+    return this.writeAckedFrame(encodeContactRecordRewrite(row, patch));
+  }
+
+  /** The error to throw for a write the radio did not confirm. */
+  private ackError(ack: AckResult, what: string): Error {
+    if (ack.timedOut) return new ProtocolTimeoutError(RESP.OK);
+    return new ProtocolError(ack.errorCode, `${what} rejected by radio: ${repeaterAdmin.describeErrCode(ack.errorCode)}`);
+  }
+
+  /** Write a frame answered by RESP_OK / RESP_ERR and await that answer.
+   *  Rejects only on a write failure; a refusal or timeout resolves
+   *  `{ ok: false }`. */
+  private async writeAckedFrame(frame: Buffer): Promise<AckResult> {
+    const ack = this.awaitAck();
+    try {
+      await this.writeFrame(frame);
+    } catch (err) {
+      this.popPendingAck(ack.entry);
+      throw err;
+    }
+    return ack.promise;
   }
 
   /** Toggle the per-contact "always use direct (companion-side) login" flag.
@@ -1108,7 +1351,8 @@ export class MeshCoreSession {
   /** Set the radio's global path-hash mode (bytes per hop). Persists on the
    *  radio and updates local RadioSettings on RESP_OK. */
   async setPathHashMode(size: 1 | 2 | 3): Promise<void> {
-    await this.writeFrame(encodeSetPathHashMode(pathHashSizeToMode(size)));
+    const ack = await this.writeAckedFrame(encodeSetPathHashMode(pathHashSizeToMode(size)));
+    if (!ack.ok) throw this.ackError(ack, 'set path hash mode');
     const state = this.state;
     const current = state.getRadioSettings();
     state.setRadioSettings({ ...current, pathHashMode: size });
@@ -1164,7 +1408,9 @@ export class MeshCoreSession {
     return this.withSyncLock(async () => {
       const start = this.armWaiter('contactsStartWaiter', CONTACTS_START_WAIT_MS);
       const done = this.armWaiter('contactsDoneWaiter', CONTACTS_DONE_WAIT_MS);
-      await this.writeFrame(encodeGetContacts());
+      await this.ctx.writeExpectingReply(encodeGetContacts(), RESP.CONTACTS_START, (ack) => {
+        this.log.warn(`GET_CONTACTS refused: ${repeaterAdmin.describeErrCode(ack.errorCode)}`);
+      });
       await start;
       await done;
       return this.state.getContacts();
@@ -1402,11 +1648,20 @@ export class MeshCoreSession {
     await requestAutoAddConfig(this.ctx);
   }
 
-  /** Toggle the GPS module / change interval via custom-var KV. The firmware
-   *  ignores intervals outside [60, 86399]; we clamp client-side too. */
+  /** Toggle the GPS module, then set its update interval, via custom vars.
+   *  Resolves true once the radio accepts the `gps` toggle, false when it
+   *  refuses it (no GPS hardware), times out, or no radio is attached.
+   *
+   *  The interval is best-effort. Only EnvironmentSensorManager builds with
+   *  ENV_INCLUDE_GPS accept `gps_interval`; the dedicated trackers (T1000-E,
+   *  Heltec Tracker, MeshTracker X1, ...) answer it with RESP_ERR after the
+   *  toggle has already taken effect, so a refused interval keeps the previous
+   *  `intervalSec` but does not fail the call. The firmware stores any
+   *  interval in [0, 86400] (polling at 1s for 0); we clamp to [60, 86400] so
+   *  a stray small value can't keep the GPS polling near continuously. */
   async setGpsConfig(cfg: { enabled: boolean; intervalSec: number }): Promise<boolean> {
     if (!this.isCommandable()) return false;
-    const interval = Math.min(86399, Math.max(60, Math.floor(cfg.intervalSec)));
+    const interval = Math.min(86400, Math.max(60, Math.floor(cfg.intervalSec)));
     const ack1 = this.awaitAck();
     try {
       await this.writeFrame(encodeSetCustomVar('gps', cfg.enabled));
@@ -1416,19 +1671,22 @@ export class MeshCoreSession {
       return false;
     }
     if (!(await ack1.promise).ok) return false;
+    // The toggle has taken effect on the radio: record it now, whatever
+    // happens to the interval.
+    foldGpsVars(this.ctx, { gps: cfg.enabled ? '1' : '0' });
     await sleep(WRITE_GAP_MS);
-    const ack2 = this.awaitAck();
+    let ack2: AckResult;
     try {
-      await this.writeFrame(encodeSetCustomVar('gps_interval', interval));
+      ack2 = await this.writeAckedFrame(encodeSetCustomVar('gps_interval', interval));
     } catch (err) {
-      this.popPendingAck(ack2.entry);
       this.log.warn(`setCustomVar(gps_interval) write failed: ${(err as Error).message}`);
-      return false;
+      return true;
     }
-    if (!(await ack2.promise).ok) return false;
-    const state = this.state;
-    state.setGpsConfig({ enabled: cfg.enabled, intervalSec: interval });
-    this.events.emit('gpsConfig', state.getGpsConfig());
+    if (ack2.ok) {
+      foldGpsVars(this.ctx, { gps_interval: String(interval) });
+    } else {
+      this.log.debug(`gps_interval not applied: ${repeaterAdmin.describeErrCode(ack2.errorCode)}`);
+    }
     return true;
   }
 
@@ -1464,22 +1722,59 @@ export class MeshCoreSession {
     }
   }
 
-  /** Query the firmware's custom-var store ("gps", "gps_interval", etc.).
-   *  Empty key requests all known keys. Reply: RESP_CUSTOM_VARS. */
-  async requestCustomVars(key = ''): Promise<void> {
-    if (!this.isCommandable()) return;
-    try {
-      await this.writeFrame(encodeGetCustomVar(key));
-    } catch (err) {
-      this.log.warn(`requestCustomVars write failed: ${(err as Error).message}`);
+  /** Read the radio's sensor settings (CMD_GET_CUSTOM_VARS) as
+   *  `key → value`, e.g. `{ gps: '1' }`. Resolves `{}` when the radio exposes
+   *  none (no GPS hardware). `gps_interval` is write-only in firmware and never
+   *  appears. Also emits `customVars` with the same map (and `gpsConfig` when
+   *  `gps` is present). Rejects with ProtocolError on RESP_ERR (firmware
+   *  without the command), ProtocolTimeoutError when the radio doesn't answer,
+   *  or an Error when no radio is attached.
+   *
+   *  @param key Ignored by the firmware, which always returns every setting.
+   *    Kept for compatibility. */
+  async requestCustomVars(key = ''): Promise<Record<string, string>> {
+    if (!this.isCommandable()) throw new Error('no radio attached');
+    const frame = await this.requestOrError(encodeGetCustomVar(key), RESP.CUSTOM_VARS);
+    return applyCustomVars(this.ctx, frame);
+  }
+
+  /** Write one sensor setting (CMD_SET_CUSTOM_VAR `key:value`), e.g.
+   *  `setCustomVar('gps', '1')`. Resolves true on RESP_OK, false on RESP_ERR
+   *  (the radio has no such setting, or rejected the value), a timeout, or no
+   *  radio. A `gps` value is sent as `'0'` (for `'0'` / `'false'`) or `'1'`
+   *  (anything else): the firmware starts the GPS for any value but `'0'` yet
+   *  persists it as on only for `'1'`. A successful `gps` / `gps_interval`
+   *  write also updates GpsConfig and emits `gpsConfig`. Throws when `key` is
+   *  empty or contains `:`, which the firmware uses as the separator. */
+  async setCustomVar(key: string, value: string): Promise<boolean> {
+    if (key.length === 0 || key.includes(':')) {
+      throw new Error(`invalid custom var key ${JSON.stringify(key)}: must be non-empty and contain no ':'`);
     }
+    if (!this.isCommandable()) return false;
+    const wire = key === 'gps' ? (value === '0' || value === 'false' ? '0' : '1') : value;
+    let ack: AckResult;
+    try {
+      ack = await this.writeAckedFrame(encodeSetCustomVar(key, wire));
+    } catch (err) {
+      this.log.warn(`setCustomVar(${key}) write failed: ${(err as Error).message}`);
+      return false;
+    }
+    if (!ack.ok) return false;
+    foldGpsVars(this.ctx, { [key]: wire });
+    return true;
   }
 
   /** Send a self-advert. `flood=true` propagates many hops (so DM-able by
    *  distant peers); `flood=false` is zero-hop (cheap, only direct neighbors). */
   async sendSelfAdvert(flood = true): Promise<{ ok: boolean; error?: string }> {
     try {
-      await this.writeFrame(buildSendSelfAdvert(flood));
+      // Resolves on the write, as before; the sink consumes the radio's
+      // RESP_OK / RESP_ERR (TABLE_FULL when it couldn't queue the advert).
+      await this.writeAckSink(buildSendSelfAdvert(flood), (ack) => {
+        if (!ack.ok && !ack.timedOut) {
+          this.log.warn(`self advert rejected by radio: ${repeaterAdmin.describeErrCode(ack.errorCode)}`);
+        }
+      });
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -1564,7 +1859,14 @@ export class MeshCoreSession {
   /** Import a 64-byte private key (hex), replacing the device identity. Rejects
    *  ProtocolError on a bad key / FS error. */
   async importPrivateKey(privKeyHex: string): Promise<void> {
-    return deviceAdmin.importPrivateKey(this.ctx, privKeyHex);
+    await deviceAdmin.importPrivateKey(this.ctx, privKeyHex);
+    // The radio swaps identity without a SELF_INFO push; re-read it so the
+    // owner (and the prefix requestSelfTelemetry matches on) is the new key.
+    try {
+      await this.getSelfInfo();
+    } catch (err) {
+      this.log.warn(`self-info refresh after key import failed: ${(err as Error).message}`);
+    }
   }
 
   /** Set the BLE pairing PIN (0 disables it; otherwise a 6-digit number). */
@@ -1651,6 +1953,18 @@ export class MeshCoreSession {
     return repeaterAdmin.sendTelemetryReq(this.ctx, contactKey);
   }
 
+  /** Read the connected radio's own telemetry (battery, MCU temperature,
+   *  attached sensors) and resolve the raw CayenneLPP bytes; decode them with
+   *  `Protocol.parseTelemetryLpp`. Nothing goes on the air. Does not emit
+   *  `repeaterTelemetry`. Rejects with ProtocolError on RESP_ERR — firmware
+   *  without self telemetry answers ERR_CODE_UNSUPPORTED_CMD and the message
+   *  says "unsupported" — and ProtocolTimeoutError after `timeoutMs`
+   *  (default `Models.SELF_TELEMETRY_TIMEOUT_MS`). */
+  async requestSelfTelemetry(opts: { timeoutMs?: number } = {}): Promise<Buffer> {
+    if (!this.isCommandable()) throw new Error('no radio attached');
+    return repeaterAdmin.requestSelfTelemetry(this.ctx, opts.timeoutMs);
+  }
+
   /** Login to a repeater via CMD_SEND_LOGIN — the radio routes it (direct when
    *  the contact's out_path is known, flood otherwise). An empty `password` is a
    *  guest login. Returns the effective mode so the UI can label the toast
@@ -1702,10 +2016,22 @@ export class MeshCoreSession {
   }
 
   /** Send a generic binary request to a contact and resolve the raw response
-   *  body. `reqData` is [REQ_TYPE byte, ...params]. The ACL/neighbours/owner/
-   *  avg-min-max helpers are thin wrappers over this. */
-  async sendBinaryRequest(contactKey: string, reqData: Buffer, opts: { timeoutMs?: number } = {}): Promise<Buffer> {
-    return repeaterAdmin.sendBinaryReq(this.ctx, contactKey, reqData, opts.timeoutMs);
+   *  body. `reqData` is [REQ_TYPE byte, ...params] (see
+   *  `Protocol.buildTelemetryReqData` for a telemetry request). The ACL/
+   *  neighbours/avg-min-max helpers are thin wrappers over this.
+   *
+   *  `opts.onSent` fires once the radio reports the request on the air, with
+   *  whether it flooded and the radio's reply-time estimate. `opts.signal`
+   *  aborts the wait: the promise rejects with `signal.reason` (an AbortError
+   *  for a plain `abort()`) and a late reply is dropped. Rejects with
+   *  ProtocolError when the radio refuses to send (RESP_ERR NOT_FOUND: the
+   *  contact isn't on the radio; TABLE_FULL: the send failed). */
+  async sendBinaryRequest(
+    contactKey: string,
+    reqData: Buffer,
+    opts: repeaterAdmin.BinaryRequestOptions = {},
+  ): Promise<Buffer> {
+    return repeaterAdmin.sendBinaryReq(this.ctx, contactKey, reqData, opts);
   }
 
   /** Request a min/max/avg series window from a sensor contact. */

@@ -59,6 +59,25 @@ export class AdminSessionStore {
     return this.awaitKey<T>(`login:${pubKeyPrefixHex.toLowerCase()}`, timeoutMs);
   }
 
+  /** Like awaitLogin, plus a `reject` bound to THIS awaiter: it is a no-op
+   *  once the awaiter has settled or been superseded by a newer login to the
+   *  same node, so a late failure of one login can't fail the next. */
+  awaitLoginHandle<T>(
+    pubKeyPrefixHex: string,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  ): { promise: Promise<T>; reject: (err: Error) => boolean } {
+    const key = `login:${pubKeyPrefixHex.toLowerCase()}`;
+    const promise = this.awaitKey<T>(key, timeoutMs);
+    const mine = this.pending.get(key);
+    return {
+      promise,
+      reject: (err) => {
+        if (!mine || this.pending.get(key) !== mine) return false;
+        return this.rejectKey(key, err);
+      },
+    };
+  }
+
   private awaitKey<T>(key: string, timeoutMs: number): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const existing = this.pending.get(key);
@@ -86,8 +105,17 @@ export class AdminSessionStore {
     return this.resolveKey(`login:${pubKeyPrefixHex.toLowerCase()}`, value);
   }
 
+  /** Reject and drop a pending tag awaiter, so a late reply carrying the tag
+   *  finds nothing to wake. Returns false when no awaiter holds the tag. */
+  rejectTag(tagHex: string, err: Error): boolean {
+    return this.rejectKey(`tag:${tagHex.toLowerCase()}`, err);
+  }
+
   rejectLogin(pubKeyPrefixHex: string, err: Error): boolean {
-    const key = `login:${pubKeyPrefixHex.toLowerCase()}`;
+    return this.rejectKey(`login:${pubKeyPrefixHex.toLowerCase()}`, err);
+  }
+
+  private rejectKey(key: string, err: Error): boolean {
     const entry = this.pending.get(key);
     if (!entry) return false;
     clearTimeout(entry.timer);

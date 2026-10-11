@@ -1,4 +1,10 @@
-import { advTypeToKind, type DiscoveredContact, hashSizeFromOutPathLen, hopsFromOutPathLen } from '../contacts';
+import {
+  advTypeToKind,
+  type DiscoveredContact,
+  hashSizeFromOutPathLen,
+  hopsFromOutPathLen,
+  telemetryPermsFromFlags,
+} from '../contacts';
 
 /** Snake_case row shape mirroring the donor sqlite `discovered_contacts` table.
  *  Kept identical so the (later-ported) contacts feature can reference
@@ -59,6 +65,7 @@ function rowToDiscovered(row: DiscoveredRow): DiscoveredContact {
     firstHeardMs: row.first_heard_ms,
     onRadio: row.on_radio !== 0,
     favourite: row.favourite !== 0,
+    telemetryPerms: telemetryPermsFromFlags(row.flags),
   };
 }
 
@@ -83,8 +90,17 @@ export class DiscoveredStore {
    *  PUSH_NEW_ADVERT (0x8a), where we actually heard the node — from a
    *  GET_CONTACTS resync (the device listing what it stores).
    *  `last_heard_ms` is our-clock and only advances on a live advert — it never
-   *  moves on a resync (committing a contact to the radio can't bump it). */
-  upsert(record: DiscoveredUpsertRecord, opts: { onRadio: boolean; nowMs: number; heardLive: boolean }): void {
+   *  moves on a resync (committing a contact to the radio can't bump it).
+   *
+   *  `flagsFromRadio` marks a record read from the radio's contact store
+   *  (GET_CONTACTS, GET_CONTACT_BY_KEY): its flags byte is the radio's own and
+   *  replaces the row's. An advert record carries no flags (the firmware zeroes
+   *  them), so without it the row keeps the flags it had — favourite and the
+   *  telemetry permissions — rather than letting a re-advert wipe them. */
+  upsert(
+    record: DiscoveredUpsertRecord,
+    opts: { onRadio: boolean; nowMs: number; heardLive: boolean; flagsFromRadio?: boolean },
+  ): void {
     this.listCache = null;
     const heardMs = opts.heardLive ? opts.nowMs : 0;
     const incomingFavourite = record.flags & 0x01 ? 1 : 0;
@@ -108,14 +124,16 @@ export class DiscoveredStore {
       });
       return;
     }
-    // Preserve favourite + first_heard_ms; refresh advert fields. Keep flags
-    // bit 0 consistent with the preserved favourite so a re-advert can't drop
-    // a favourite. last_heard_ms uses MAX so a resync (heardMs=0) never lowers it.
+    // Preserve first_heard_ms; refresh advert fields. The flags byte (and the
+    // favourite bit 0 within it) is replaced only by the radio's own record.
+    // last_heard_ms uses MAX so a resync (heardMs=0) never lowers it.
+    const flags = opts.flagsFromRadio ? record.flags : existing.flags;
     this.rows.set(record.publicKeyHex, {
       ...existing,
       name: record.name,
       type: record.type,
-      flags: (record.flags & ~1) | existing.favourite,
+      flags,
+      favourite: flags & 1 ? 1 : 0,
       out_path_len: record.outPathLen,
       out_path_hex: record.outPathHex,
       last_advert_unix: record.lastAdvertUnix,
@@ -162,6 +180,26 @@ export class DiscoveredStore {
     const bit = favourite ? 1 : 0;
     row.favourite = bit;
     row.flags = (row.flags & ~1) | bit;
+    this.listCache = null;
+  }
+
+  /** Record a path the radio now holds for this contact (after a successful
+   *  CMD_ADD_UPDATE_CONTACT / CMD_RESET_PATH), so a later full-record rewrite
+   *  built from this row doesn't put the old path back. */
+  setOutPath(pubkey: string, outPathLen: number, outPathHex: string): void {
+    const row = this.rows.get(pubkey);
+    if (!row) return;
+    row.out_path_len = outPathLen & 0xff;
+    row.out_path_hex = outPathHex;
+    this.listCache = null;
+  }
+
+  /** Replace the row's firmware flags byte. `favourite` follows bit 0. */
+  setFlags(pubkey: string, flags: number): void {
+    const row = this.rows.get(pubkey);
+    if (!row) return;
+    row.flags = flags & 0xff;
+    row.favourite = flags & 1 ? 1 : 0;
     this.listCache = null;
   }
 

@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { CMD, PERM_BITS, type STATS_TYPE } from './codes';
+import { CMD, PERM_BITS, REQ_TYPE, type STATS_TYPE } from './codes';
 import { parsePublicKey } from './pubkey';
 
 // PUSH_LOGIN_SUCCESS (firmware: companion_radio/MyMesh.cpp:676-700). Two
@@ -369,6 +369,55 @@ export function buildSendTelemetryReq(destPublicKeyHex: string): Buffer {
   return out;
 }
 
+// CMD_SEND_TELEMETRY_REQ, 'self' form (firmware: companion_radio/MyMesh.cpp,
+// the `len == 4` branch): [0x27][3B reserved]. No pubkey: the radio reads its
+// own battery / MCU temperature / sensors and answers at once with
+// PUSH_TELEMETRY_RESPONSE [0x8b][0x00][6B own pubkey prefix][LPP]. Nothing goes
+// on the air and no RESP_SENT is sent. Firmware without this branch answers
+// RESP_ERR ERR_CODE_UNSUPPORTED_CMD.
+export function buildSendSelfTelemetryReq(): Buffer {
+  return Buffer.from([CMD.SEND_TELEMETRY_REQ, 0, 0, 0]);
+}
+
+/** Which telemetry groups a request asks for. Mirrors the firmware's
+ *  TELEM_PERM_* bits: base (battery) 0x01, location 0x02, environment 0x04. */
+export interface TelemetryPermsMask {
+  base: boolean;
+  loc: boolean;
+  env: boolean;
+}
+
+// REQ_TYPE_GET_TELEMETRY_DATA request body for CMD_SEND_BINARY_REQ:
+//   [0x03][~mask][0][0][0][4B random]
+// The byte after the type is an INVERSE permission mask (`perm_mask =
+// ~payload[1]`; 0x00 asks for everything). How it's applied depends on the
+// node answering:
+//   - repeater (simple_repeater): uses ~mask as is, but forces 0 for a guest,
+//     and always includes battery voltage and MCU temperature;
+//   - sensor (simple_sensor): uses ~mask as is; ACL permissions are ignored;
+//   - companion (another chat node): ANDs ~mask with what its telemetry modes
+//     and our contact flags allow, and sends NO reply at all when the base
+//     bit is cleared — a request with base:false to a companion times out.
+// The trailing random bytes keep the packet hash unique so repeats aren't
+// dropped as duplicates.
+export function buildTelemetryReqData(
+  mask: TelemetryPermsMask = { base: true, loc: true, env: true },
+  random: Buffer = randomBytes4(),
+): Buffer {
+  const bits = (mask.base ? 0x01 : 0) | (mask.loc ? 0x02 : 0) | (mask.env ? 0x04 : 0);
+  const out = Buffer.alloc(9);
+  out[0] = REQ_TYPE.GET_TELEMETRY_DATA;
+  out[1] = ~bits & 0xff;
+  random.copy(out, 5, 0, 4);
+  return out;
+}
+
+function randomBytes4(): Buffer {
+  const out = Buffer.alloc(4);
+  for (let i = 0; i < 4; i += 1) out[i] = Math.floor(Math.random() * 256);
+  return out;
+}
+
 // CMD_SEND_LOGIN: [0x1a][32B dest pubkey][ASCII password...] (firmware:
 // MyMesh.cpp:1500-1521). Firmware appends a null terminator beyond `len`, so we
 // pass the password as-is — no need to send a trailing 0.
@@ -588,7 +637,10 @@ interface CayenneDescriptor {
 // (GPS, accelerometer, gyrometer, colour) decode to a comma-separated string so
 // `value` stays number|string. POLYLINE (240) is variable-length and omitted —
 // it surfaces via the abort-on-unknown fallback. Sizes/scaling match the
-// MeshCore reference (meshcore.js/src/cayenne_lpp.js).
+// MeshCore reference (meshcore.js/src/cayenne_lpp.js). Signedness follows the
+// ElectronicCats CayenneLPP library the firmware encodes with
+// (`getTypeSigned()`): voltage, current, analog in/out, temperature,
+// accelerometer, altitude, gyrometer and GPS are signed.
 const CAYENNE_TYPES: Record<number, CayenneDescriptor> = {
   0: { name: 'Digital input', size: 1, decode: (b) => b.readUInt8(0) }, // 0x00
   1: { name: 'Digital output', size: 1, decode: (b) => b.readUInt8(0) }, // 0x01
@@ -606,7 +658,7 @@ const CAYENNE_TYPES: Record<number, CayenneDescriptor> = {
     unit: 'G',
   }, // 0x71
   115: { name: 'Barometer', size: 2, decode: (b) => b.readUInt16BE(0) / 10, unit: 'hPa' }, // 0x73
-  116: { name: 'Voltage', size: 2, decode: (b) => b.readUInt16BE(0) / 100, unit: 'V' }, // 0x74
+  116: { name: 'Voltage', size: 2, decode: (b) => b.readInt16BE(0) / 100, unit: 'V' }, // 0x74 (signed)
   117: { name: 'Current', size: 2, decode: (b) => b.readInt16BE(0) / 1000, unit: 'A' }, // 0x75 (signed)
   118: { name: 'Frequency', size: 4, decode: (b) => b.readUInt32BE(0), unit: 'Hz' }, // 0x76
   120: { name: 'Percentage', size: 1, decode: (b) => b.readUInt8(0), unit: '%' }, // 0x78
@@ -636,15 +688,31 @@ const CAYENNE_TYPES: Record<number, CayenneDescriptor> = {
   142: { name: 'Switch', size: 1, decode: (b) => b.readUInt8(0) }, // 0x8e
 };
 
+// Decoding stops at trailing zero padding: a telemetry reply that crossed the
+// mesh is AES-block padded with zero bytes, which would otherwise decode as
+// bogus channel-0 "Digital input" records. MeshCore never uses LPP channel 0
+// (TELEM_CHANNEL_SELF is 1), so an all-zero remainder is always padding.
+//
+// Bytes that can't be decoded are kept, not dropped: an unknown type, or a
+// record cut short by the end of the buffer, ends decoding with one 'Unknown'
+// field whose `value` is the hex of everything after its channel/type bytes.
 function decodeCayenneLPP(b: Buffer): TelemetryField[] {
   const out: TelemetryField[] = [];
   let i = 0;
-  while (i + 2 <= b.length) {
+  while (i < b.length) {
+    if (isZeroPadding(b, i)) break;
+    if (i + 2 > b.length) {
+      // A lone trailing byte, too short for a channel/type header: keep it
+      // whole in `value`.
+      out.push({ channel: b[i], typeHex: '', name: 'Unknown', value: b.subarray(i).toString('hex') });
+      break;
+    }
     const channel = b[i];
     const type = b[i + 1];
     const desc = CAYENNE_TYPES[type];
-    if (!desc) {
-      // Unknown type — abort rather than mis-frame the rest.
+    if (!desc || i + 2 + desc.size > b.length) {
+      // Unknown type, or a record cut short — stop rather than mis-frame the
+      // rest, and keep the undecoded bytes.
       out.push({
         channel,
         typeHex: `0x${type.toString(16).padStart(2, '0')}`,
@@ -653,7 +721,6 @@ function decodeCayenneLPP(b: Buffer): TelemetryField[] {
       });
       break;
     }
-    if (i + 2 + desc.size > b.length) break;
     const data = b.subarray(i + 2, i + 2 + desc.size);
     out.push({
       channel,
@@ -665,6 +732,11 @@ function decodeCayenneLPP(b: Buffer): TelemetryField[] {
     i += 2 + desc.size;
   }
   return out;
+}
+
+function isZeroPadding(b: Buffer, from: number): boolean {
+  for (let i = from; i < b.length; i += 1) if (b[i] !== 0) return false;
+  return true;
 }
 
 // ---- Avg/Min/Max series (REQ_TYPE_GET_AVG_MIN_MAX) ---------------------

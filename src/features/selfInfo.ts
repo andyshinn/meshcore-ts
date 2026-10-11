@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { Owner } from '../model/types';
+import type { Owner, TelemetryPolicy } from '../model/types';
 import { CMD, RESP } from '../protocol/codes';
 import type { Feature, FeatureContext } from './feature';
 
@@ -190,12 +190,30 @@ export function applySelfInfo(ctx: FeatureContext, frame: Buffer): SelfInfo | nu
     ctx.events.emit('autoAddConfig', nextAutoAdd);
   }
 
+  // Fold the radio's telemetry modes (byte 46) and multi-acks (byte 44) into
+  // TelemetryPolicy. Until this runs the policy holds the library default,
+  // which says nothing about the radio, so emit on every SELF_INFO — even an
+  // unchanged value is news to a consumer that has only seen the default. A
+  // 2-bit mode of 3 is undefined in firmware, which treats it as deny (0).
+  const nextPolicy: TelemetryPolicy = {
+    base: telemetryMode(parsed.telemetryModeBase),
+    loc: telemetryMode(parsed.telemetryModeLoc),
+    env: telemetryMode(parsed.telemetryModeEnv),
+    multiAcks: parsed.multiAcks,
+  };
+  ctx.state.setTelemetryPolicy(nextPolicy);
+  ctx.events.emit('telemetryPolicy', { ...nextPolicy });
+
   ctx.log.debug(`self-info: "${owner.name}" (${owner.publicKeyShort})`);
   return parsed;
 }
 
+function telemetryMode(mode: number): TelemetryPolicy['base'] {
+  return mode === 1 || mode === 2 ? mode : 0;
+}
+
 // RESP handler: surface the radio's identity as the app Owner, radio config,
-// and advertised device identity.
+// advertised device identity and telemetry policy.
 export const selfInfoFeature: Feature = {
   handles: [RESP.SELF_INFO],
   handle: (_code, frame, ctx) => {

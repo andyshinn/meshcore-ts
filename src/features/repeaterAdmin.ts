@@ -1,8 +1,14 @@
 import { Buffer } from 'node:buffer';
 import { contactKindToAdvType } from '../model/contacts';
-import { ADMIN_REPLY_TIMEOUT_MS, ADMIN_SENT_TIMEOUT_MS, CLI_REPLY_TIMEOUT_MS } from '../model/timeouts';
+import { ProtocolError } from '../model/errors';
+import {
+  ADMIN_REPLY_TIMEOUT_MS,
+  ADMIN_SENT_TIMEOUT_MS,
+  CLI_REPLY_TIMEOUT_MS,
+  SELF_TELEMETRY_TIMEOUT_MS,
+} from '../model/timeouts';
 import type { CliSendPhase, Contact } from '../model/types';
-import { ANON_REQ_TYPE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
+import { ANON_REQ_TYPE, ERR_CODE, PUSH, REQ_TYPE, RESP, STATS_TYPE, TXT_TYPE } from '../protocol/codes';
 import {
   type AclEntry,
   type AvgMinMaxResult,
@@ -11,6 +17,7 @@ import {
   buildSendAnonReq,
   buildSendBinaryReq,
   buildSendLogin,
+  buildSendSelfTelemetryReq,
   buildSendStatusReq,
   buildSendTracePath,
   type LocalStats,
@@ -33,9 +40,11 @@ import {
   type TraceData,
 } from '../protocol/repeater';
 import type { AdminMode, AdminRole } from './adminSessions';
-import { encodeAddUpdateContact, encodeResetPath } from './contacts';
+import { contactRecordFlags, encodeAddUpdateContact, encodeContactRecordRewrite, encodeResetPath } from './contacts';
+import type { SentAck } from './directMessages';
 import * as directMessages from './directMessages';
 import type { Feature, FeatureContext } from './feature';
+import { nextReplySeq } from './replyOrder';
 
 /** How a repeater login was actually dispatched, so the UI can label the toast:
  *  `'direct'` (companion-side CMD_SEND_LOGIN), `'path'` (mesh-routed over a known
@@ -44,12 +53,22 @@ export type RepeaterReachMode = 'direct' | 'flood' | 'path';
 
 // ---- Admin-coordination state ------------------------------------------
 
-// FIFO of admin sends still awaiting their RESP_SENT tag echo. Admin writes are
-// serialised, so the oldest entry is always the one the radio just acked. The
-// directMessages feature owns RESP_SENT; it calls our `onSentTag` hook first.
+// FIFO of admin sends still awaiting their RESP_SENT: tagged requests (binary /
+// anon), plus logins, status requests and traces, which answer with RESP_SENT
+// too and must hold a slot or their RESP_SENT would be credited to the next
+// send in line. The directMessages feature owns RESP_SENT and hands it here
+// when our head is older than its own (see replyOrder.ts). The session hands
+// us a RESP_ERR the same way, via failOldestAdminSend.
 interface PendingAdminSent {
-  resolve: (tagHex: string) => void;
-  reject: (err: Error) => void;
+  /** Write-order stamp (replyOrder.ts). */
+  seq: number;
+  /** What was sent, for error text ("binary request", "login", ...). */
+  label: string;
+  /** RESP_SENT arrived for this send. */
+  onSent: (sent: SentAck) => void;
+  /** The send failed: ProtocolError on RESP_ERR, a plain Error on the
+   *  RESP_SENT timeout or teardown. */
+  fail: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -67,8 +86,13 @@ interface PendingCli {
  *  pendingCli / pendingLocalStats). Relocated onto ctx.rt.adminCorr. */
 export interface AdminCorrRuntime {
   adminSentQueue: PendingAdminSent[];
+  /** Cancels the awaiter of the mesh request the radio is currently tracking.
+   *  See claimMeshRequestSlot. */
+  meshRequestSlot: ((err: Error) => void) | null;
   pendingCli: Map<string, PendingCli>;
   pendingLocalStats: {
+    /** The `kind` the reply must carry (the subtype asked for). */
+    kind: LocalStats['kind'];
     resolve: (v: LocalStats) => void;
     reject: (e: Error) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -76,7 +100,7 @@ export interface AdminCorrRuntime {
 }
 
 export function createAdminCorrRuntime(): AdminCorrRuntime {
-  return { adminSentQueue: [], pendingCli: new Map(), pendingLocalStats: null };
+  return { adminSentQueue: [], meshRequestSlot: null, pendingCli: new Map(), pendingLocalStats: null };
 }
 
 /** Register the directMessages admin-intercept hooks against this session's
@@ -85,12 +109,12 @@ export function createAdminCorrRuntime(): AdminCorrRuntime {
  *  awaiters first crack (returning true when an awaiter consumed the frame). */
 export function registerAdminHooks(ctx: FeatureContext): void {
   directMessages.setAdminHooks(ctx, {
-    onSentTag: (tagHex) => {
-      const adminAwait = ctx.rt.adminCorr.adminSentQueue.shift();
-      if (!adminAwait) return false;
-      clearTimeout(adminAwait.timer);
-      adminAwait.resolve(tagHex);
-      return true;
+    sentHeadSeq: () => adminSentHeadSeq(ctx),
+    onSent: (sent) => {
+      const head = ctx.rt.adminCorr.adminSentQueue.shift();
+      if (!head) return;
+      clearTimeout(head.timer);
+      head.onSent(sent);
     },
     onCliReply: (prefix, body) => {
       const pending = ctx.rt.adminCorr.pendingCli.get(prefix);
@@ -103,6 +127,83 @@ export function registerAdminHooks(ctx: FeatureContext): void {
   });
 }
 
+/** The radio tracks ONE outstanding mesh request: every login, binary, anon,
+ *  status and path-discovery send calls clearPendingReqs() before arming its
+ *  own slot, and a reply that doesn't match the current slot is dropped inside
+ *  the radio (companion MyMesh.cpp onContactResponse). So once a newer such
+ *  request is on the air, an older one's reply can never arrive. Call this
+ *  when a slot-clearing request's RESP_SENT arrives, with a function that
+ *  fails its awaiter: the previous holder is failed at once instead of
+ *  waiting out its full reply timeout. Trace, DM / CLI and self telemetry
+ *  don't touch the slot.
+ *
+ *  `cancel` must fail only ITS OWN request, and be a no-op once that request
+ *  has settled: it can run long after (the next claim may come minutes
+ *  later), and a key-based reject (a login's pubkey prefix) would otherwise
+ *  hit a newer request to the same node. Call it in the turn the RESP_SENT is
+ *  handled, so claims happen in wire order. */
+export function claimMeshRequestSlot(ctx: FeatureContext, cancel: (err: Error) => void): void {
+  const previous = ctx.rt.adminCorr.meshRequestSlot;
+  ctx.rt.adminCorr.meshRequestSlot = cancel;
+  previous?.(new Error('superseded: the radio tracks one pending mesh request at a time, and a newer one replaced it'));
+}
+
+/** Write-order stamp of the oldest admin send still waiting for RESP_SENT. */
+export function adminSentHeadSeq(ctx: FeatureContext): number | undefined {
+  return ctx.rt.adminCorr.adminSentQueue[0]?.seq;
+}
+
+const ERR_CODE_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(ERR_CODE).map(([name, code]) => [code, name]),
+);
+
+/** Describe a firmware error byte for error text, e.g. `NOT_FOUND (0x02)`. */
+export function describeErrCode(errorCode: number | undefined): string {
+  if (errorCode === undefined) return 'no error code';
+  const hex = `0x${errorCode.toString(16).padStart(2, '0')}`;
+  const name = ERR_CODE_NAMES[errorCode];
+  return name ? `${name} (${hex})` : hex;
+}
+
+/** Fail the oldest admin send with the RESP_ERR the session routed to it. */
+export function failOldestAdminSend(ctx: FeatureContext, errorCode: number | undefined): void {
+  const head = ctx.rt.adminCorr.adminSentQueue.shift();
+  if (!head) return;
+  clearTimeout(head.timer);
+  head.fail(new ProtocolError(errorCode, `${head.label} rejected by radio: ${describeErrCode(errorCode)}`));
+}
+
+/** Queue an admin send's RESP_SENT slot. Call it in the same synchronous turn
+ *  as the writeFrame() it stands for, so its write-order stamp is right. If no
+ *  RESP_SENT or RESP_ERR arrives within ADMIN_SENT_TIMEOUT_MS the slot is
+ *  dropped and `fail` gets a plain Error. */
+function parkAdminSent(
+  ctx: FeatureContext,
+  label: string,
+  handlers: { onSent: (sent: SentAck) => void; fail: (err: Error) => void },
+): PendingAdminSent {
+  const entry: PendingAdminSent = {
+    seq: nextReplySeq(ctx),
+    label,
+    onSent: handlers.onSent,
+    fail: handlers.fail,
+    timer: setTimeout(() => {
+      unparkAdminSent(ctx, entry);
+      handlers.fail(new Error(`admin RESP_SENT timed out after ${ADMIN_SENT_TIMEOUT_MS}ms`));
+    }, ADMIN_SENT_TIMEOUT_MS),
+  };
+  ctx.rt.adminCorr.adminSentQueue.push(entry);
+  return entry;
+}
+
+/** Drop a parked slot whose write failed (no reply will come for it). */
+function unparkAdminSent(ctx: FeatureContext, entry: PendingAdminSent): void {
+  const queue = ctx.rt.adminCorr.adminSentQueue;
+  const i = queue.indexOf(entry);
+  if (i !== -1) queue.splice(i, 1);
+  clearTimeout(entry.timer);
+}
+
 /** Fail every in-flight admin awaiter + drop login sessions (on disconnect/stop). */
 export function resetAdmin(ctx: FeatureContext, reason: string): void {
   const corr = ctx.rt.adminCorr;
@@ -110,7 +211,7 @@ export function resetAdmin(ctx: FeatureContext, reason: string): void {
     const entry = corr.adminSentQueue.shift();
     if (entry) {
       clearTimeout(entry.timer);
-      entry.reject(new Error(reason));
+      entry.fail(new Error(reason));
     }
   }
   for (const entry of corr.pendingCli.values()) {
@@ -118,6 +219,7 @@ export function resetAdmin(ctx: FeatureContext, reason: string): void {
     entry.reject(new Error(reason));
   }
   corr.pendingCli.clear();
+  corr.meshRequestSlot = null;
   if (corr.pendingLocalStats) {
     clearTimeout(corr.pendingLocalStats.timer);
     corr.pendingLocalStats.reject(new Error(reason));
@@ -140,57 +242,107 @@ function lookupRepeaterContact(
   return { ok: true, publicKeyHex: contact.publicKeyHex };
 }
 
-/** Write a pre-built request frame, park an admin RESP_SENT awaiter for the tag
- *  the firmware echoes, then resolve the matching PUSH_BINARY_RESPONSE body.
- *  Shared by CMD_SEND_BINARY_REQ (sendBinaryReq) and CMD_SEND_ANON_REQ
- *  (sendAnonReq) — both correlate their reply by the same tag seam.
+/** What the radio reported when it put a request on the air (RESP_SENT). */
+export interface RequestSentInfo {
+  /** True when the radio flooded the request (no known path to the contact). */
+  flood: boolean;
+  /** The radio's estimate, in ms, of how long the reply may take. */
+  estTimeoutMs: number;
+}
+
+/** Options for {@link sendBinaryReq}. */
+export interface BinaryRequestOptions {
+  /** How long to wait for the reply once the radio has sent the request.
+   *  Default {@link ADMIN_REPLY_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Abort the wait. The promise rejects with `signal.reason` (an `AbortError`
+   *  DOMException for a plain `controller.abort()`) and the reply tag is
+   *  released, so a late reply is dropped. The request may already be on the
+   *  air: aborting does not recall it. */
+  signal?: AbortSignal;
+  /** Fires once, when RESP_SENT arrives for this request. */
+  onSent?: (info: RequestSentInfo) => void;
+}
+
+/** Write a pre-built request frame, park an admin RESP_SENT slot for it, then
+ *  resolve the PUSH_BINARY_RESPONSE body carrying the tag the RESP_SENT
+ *  echoed. Shared by CMD_SEND_BINARY_REQ (sendBinaryReq) and CMD_SEND_ANON_REQ
+ *  (sendAnonReq), which correlate their reply the same way. Rejects with
+ *  ProtocolError when the radio answers RESP_ERR instead of RESP_SENT
+ *  (NOT_FOUND: no such contact; TABLE_FULL: the send failed).
  *
- *  `onSent` (optional) fires synchronously when RESP_SENT arrives, carrying the
- *  tag — sendAnonReq uses it to restore a flood contact's path the instant the
- *  packet is on its way (mirrors meshcore_py's reset-after-send).
+ *  `opts.onSent` fires synchronously when RESP_SENT arrives. sendAnonReq uses
+ *  it to restore a flood contact's path the instant the packet is on its way
+ *  (mirrors meshcore_py's reset-after-send).
  *
- *  Implementation note: `awaitTag` is registered synchronously inside the
- *  adminSentQueue resolver so that a PUSH_BINARY_RESPONSE arriving in the same
- *  synchronous turn as RESP_SENT (as happens in tests and under tight firmware
- *  timing) does not race past the awaiter registration. */
+ *  The tag awaiter is registered synchronously inside the RESP_SENT handler so
+ *  that a PUSH_BINARY_RESPONSE arriving in the same synchronous turn as
+ *  RESP_SENT (as happens in tests and under tight firmware timing) does not
+ *  race past the registration.
+ *
+ *  An abort before RESP_SENT leaves the slot parked but inert: the radio's
+ *  RESP_SENT (or RESP_ERR) for this frame is still coming and must be consumed
+ *  here, or it would be credited to the next send in line. */
 function sendTaggedReq(
   ctx: FeatureContext,
   frame: Buffer,
-  timeoutMs: number,
-  onSent?: (tagHex: string) => void,
+  label: string,
+  opts: { timeoutMs?: number; signal?: AbortSignal; onSent?: (sent: SentAck) => void } = {},
 ): Promise<Buffer> {
+  const { signal } = opts;
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  const timeoutMs = opts.timeoutMs ?? ADMIN_REPLY_TIMEOUT_MS;
   return new Promise<Buffer>((resolve, reject) => {
-    const queue = ctx.rt.adminCorr.adminSentQueue;
-    const timer = setTimeout(() => {
-      const i = queue.indexOf(entry);
-      if (i !== -1) queue.splice(i, 1);
-      reject(new Error(`admin RESP_SENT timed out after ${ADMIN_SENT_TIMEOUT_MS}ms`));
-    }, ADMIN_SENT_TIMEOUT_MS);
-    const entry: PendingAdminSent = {
-      resolve: (tagHex) => {
-        // Register the payload awaiter synchronously inside the RESP_SENT
-        // resolver so a PUSH_BINARY_RESPONSE that arrives in the same
-        // synchronous turn (e.g. tight firmware ack) is never missed.
-        ctx.admin.awaitTag<Buffer>(tagHex, timeoutMs).then(resolve, reject);
-        onSent?.(tagHex);
-      },
-      reject,
-      timer,
+    let settled = false;
+    let tagHex: string | undefined;
+    const settle = (finish: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      finish();
     };
-    queue.push(entry);
+    const onAbort = (): void => {
+      if (settled) return;
+      settle(() => reject(signal?.reason));
+      // Release the tag so a late PUSH_BINARY_RESPONSE finds no awaiter.
+      if (tagHex !== undefined) ctx.admin.rejectTag(tagHex, new Error(`${label} aborted`));
+    };
+    const entry = parkAdminSent(ctx, label, {
+      onSent: (sent) => {
+        const tag = sent.expectedAckHex;
+        // The radio now tracks this request, aborted or not, so it supersedes
+        // the previous holder either way.
+        claimMeshRequestSlot(ctx, (err) => {
+          if (!settled) ctx.admin.rejectTag(tag, err);
+        });
+        // Aborted before the radio answered: the RESP_SENT is consumed and dropped.
+        if (settled) return;
+        tagHex = tag;
+        ctx.admin.awaitTag<Buffer>(tag, timeoutMs).then(
+          (body) => settle(() => resolve(body)),
+          (err: Error) => settle(() => reject(err)),
+        );
+        try {
+          opts.onSent?.(sent);
+        } catch (err) {
+          ctx.log.warn(`${label}: onSent callback threw: ${(err as Error).message}`);
+        }
+      },
+      fail: (err) => settle(() => reject(err)),
+    });
+    signal?.addEventListener('abort', onAbort, { once: true });
     ctx.writeFrame(frame).catch((err) => {
-      const i = queue.indexOf(entry);
-      if (i !== -1) queue.splice(i, 1);
-      clearTimeout(timer);
-      reject(err);
+      unparkAdminSent(ctx, entry);
+      settle(() => reject(err));
     });
   });
 }
 
-/** Generic mesh request (ACL / neighbours / avg-min-max, or any custom
- *  REQ_TYPE). Issues CMD_SEND_BINARY_REQ, parks an awaiter for the matching
- *  PUSH_BINARY_RESPONSE tag, and returns the response body (which the caller
- *  decodes per req_type). `reqData` is `[REQ_TYPE byte, ...params]`.
+/** Generic mesh request (ACL / neighbours / avg-min-max / telemetry, or any
+ *  custom REQ_TYPE). Issues CMD_SEND_BINARY_REQ, parks an awaiter for the
+ *  matching PUSH_BINARY_RESPONSE tag, and returns the response body (which the
+ *  caller decodes per req_type). `reqData` is `[REQ_TYPE byte, ...params]`.
+ *  Rejects with ProtocolError when the radio refuses the request (RESP_ERR).
  *
  *  NOTE: this is the LOGIN/ACL-gated request family. Public repeaters answer
  *  OWNER / REGIONS / CLOCK only over the anon family — see sendAnonReq. */
@@ -198,7 +350,7 @@ export function sendBinaryReq(
   ctx: FeatureContext,
   contactKey: string,
   reqData: Buffer,
-  timeoutMs: number = ADMIN_REPLY_TIMEOUT_MS,
+  opts: BinaryRequestOptions = {},
 ): Promise<Buffer> {
   const contact = lookupRepeaterContact(ctx, contactKey);
   if (!contact.ok) return Promise.reject(new Error(contact.error));
@@ -208,7 +360,12 @@ export function sendBinaryReq(
   } catch (err) {
     return Promise.reject(err);
   }
-  return sendTaggedReq(ctx, frame, timeoutMs);
+  const { onSent } = opts;
+  return sendTaggedReq(ctx, frame, 'binary request', {
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
+    onSent: onSent ? (sent) => onSent({ flood: sent.flood, estTimeoutMs: sent.estTimeoutMs }) : undefined,
+  });
 }
 
 /** Build the reverse reply-path an anon request must carry so the repeater can
@@ -263,40 +420,61 @@ export async function sendAnonReq(
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     throw new Error(`contact ${contactKey} has no full 32B public key`);
   }
-  const { replyPath, isFlood } = buildAnonReplyPath(contact);
+  const { replyPath } = buildAnonReplyPath(contact);
   const data = Buffer.concat([Buffer.from([anonType & 0xff]), replyPath]);
   const frame = buildSendAnonReq(contact.publicKeyHex, data);
+  // Flood means out_path_len 0xFF. An empty path alone is not flood: a direct
+  // neighbour holds a zero-hop route (out_path_len 0), which already sends
+  // direct and must not be "restored" to flood afterwards.
+  const row = ctx.state.discovered.get(contact.publicKeyHex);
+  const isFlood = row ? row.out_path_len === 0xff : contact.hops === undefined && !contact.outPathHex;
 
   // Restore a flood contact's path exactly once (on RESP_SENT, or as a
   // finally-net if the send never confirms) so no zero-hop path leaks.
+  // `shimSent` keeps a shim that never reached the radio from triggering one.
+  let shimSent = false;
   let restored = false;
   const restoreFlood = async (): Promise<void> => {
-    if (!isFlood || restored) return;
+    if (!shimSent || restored) return;
     restored = true;
     try {
-      await ctx.writeFrame(encodeResetPath(contact.publicKeyHex));
+      // Await the RESP_OK so it can't resolve some other writer's ack.
+      await ctx.request(encodeResetPath(contact.publicKeyHex));
     } catch (err) {
       ctx.log.warn(`anon req: path reset failed for ${contactKey}: ${(err as Error).message}`);
     }
   };
 
-  if (isFlood) {
-    // Temporarily give the radio a zero-hop (empty) path so BaseChatMesh sends
-    // this ANON_REQ DIRECT (out_path_len != OUT_PATH_UNKNOWN) — a flooded anon
-    // OWNER/REGIONS/CLOCK is answered only with a path-return, never the data.
-    await ctx.writeFrame(
-      encodeAddUpdateContact({
-        publicKeyHex: contact.publicKeyHex,
-        advType: contactKindToAdvType(contact.kind),
-        flags: contact.favourite ? 0x01 : 0x00,
-        outPathHex: '',
-        name: contact.name,
-      }),
-    );
-  }
   try {
-    return await sendTaggedReq(ctx, frame, timeoutMs, () => {
-      void restoreFlood();
+    if (isFlood) {
+      // Temporarily give the radio a zero-hop (empty) path so BaseChatMesh
+      // sends this ANON_REQ DIRECT (out_path_len != OUT_PATH_UNKNOWN) — a
+      // flooded anon OWNER/REGIONS/CLOCK is answered only with a path-return,
+      // never the data. CMD_ADD_UPDATE_CONTACT replaces the whole record, so
+      // every other field — flags (favourite + telemetry permissions), name,
+      // last advert time, position — is carried through unchanged; a host-clock
+      // last_advert_timestamp would make the radio drop the node's next adverts
+      // as replays. Awaiting the RESP_OK keeps it from settling another
+      // writer's ack.
+      shimSent = true;
+      await ctx.request(
+        row
+          ? encodeContactRecordRewrite(row, { outPathHex: '' })
+          : encodeAddUpdateContact({
+              publicKeyHex: contact.publicKeyHex,
+              advType: contactKindToAdvType(contact.kind),
+              flags: contactRecordFlags(ctx, contact),
+              outPathHex: '',
+              name: contact.name,
+              timestampUnix: 0,
+            }),
+      );
+    }
+    return await sendTaggedReq(ctx, frame, 'anon request', {
+      timeoutMs,
+      onSent: () => {
+        void restoreFlood();
+      },
     });
   } finally {
     await restoreFlood();
@@ -314,10 +492,21 @@ export async function sendStatusReq(ctx: FeatureContext, contactKey: string): Pr
   if (!contact.publicKeyHex || contact.publicKeyHex.length < 64) {
     return { ok: false, error: `contact ${contactKey} has no full 32B public key` };
   }
+  // The radio answers with RESP_SENT (or RESP_ERR), which must not be credited
+  // to another send; the snapshot itself arrives later as PUSH_STATUS_RESPONSE.
+  const slot = parkAdminSent(ctx, 'status request', {
+    // Nothing waits on a status reply here (it surfaces as an event), but the
+    // request still takes the radio's one mesh-request slot.
+    onSent: () => claimMeshRequestSlot(ctx, () => {}),
+    fail: (err) => {
+      if (err instanceof ProtocolError) ctx.log.warn(`status req for ${contactKey}: ${err.message}`);
+    },
+  });
   try {
     await ctx.writeFrame(buildSendStatusReq(contact.publicKeyHex));
     return { ok: true };
   } catch (err) {
+    unparkAdminSent(ctx, slot);
     return { ok: false, error: (err as Error).message };
   }
 }
@@ -341,6 +530,47 @@ export async function sendTelemetryReq(ctx: FeatureContext, contactKey: string):
     .then((lpp) => emitTelemetryFromBinary(ctx, contactKey, lpp))
     .catch((err) => ctx.log.debug(`telemetry req for ${contactKey} failed: ${(err as Error).message}`));
   return { ok: true };
+}
+
+/** Read the connected radio's own telemetry: CMD_SEND_TELEMETRY_REQ with no
+ *  pubkey. The radio samples battery, MCU temperature and its sensors and
+ *  answers at once with PUSH_TELEMETRY_RESPONSE carrying its own pubkey
+ *  prefix; nothing goes on the air and no RESP_SENT is sent. Resolves the raw
+ *  CayenneLPP bytes, unpadded, exactly as the radio sent them. Does NOT emit
+ *  `repeaterTelemetry`.
+ *
+ *  Rejects with ProtocolError on RESP_ERR. Firmware without the self branch
+ *  answers ERR_CODE_UNSUPPORTED_CMD; that rejection's message says
+ *  "unsupported". */
+export async function requestSelfTelemetry(
+  ctx: FeatureContext,
+  timeoutMs: number = SELF_TELEMETRY_TIMEOUT_MS,
+): Promise<Buffer> {
+  const owner = ctx.state.getOwner();
+  if (!owner) throw new Error('self telemetry: radio identity not known yet (no SELF_INFO)');
+  const prefix = owner.publicKeyHex.slice(0, 12).toLowerCase();
+  let frame: Buffer;
+  try {
+    frame = await ctx.requestOrError(buildSendSelfTelemetryReq(), PUSH.TELEMETRY_RESPONSE, {
+      timeoutMs,
+      match: (f) => telemetrySenderPrefix(f) === prefix,
+    });
+  } catch (err) {
+    if (!(err instanceof ProtocolError)) throw err;
+    throw new ProtocolError(
+      err.errorCode,
+      err.errorCode === ERR_CODE.UNSUPPORTED_CMD
+        ? `self telemetry unsupported by this firmware: ${describeErrCode(err.errorCode)}`
+        : `self telemetry rejected by radio: ${describeErrCode(err.errorCode)}`,
+    );
+  }
+  return Buffer.from(frame.subarray(8));
+}
+
+/** The 6-byte sender prefix (lowercase hex) of a PUSH_TELEMETRY_RESPONSE
+ *  `[0x8b][0x00][6B prefix][LPP]`, or undefined when the frame is too short. */
+function telemetrySenderPrefix(frame: Buffer): string | undefined {
+  return frame.length >= 8 ? frame.subarray(2, 8).toString('hex') : undefined;
 }
 
 /** Decode a tag-matched telemetry LPP payload and emit `repeaterTelemetry` with
@@ -390,12 +620,29 @@ export async function repeaterLogin(
         : 'path';
 
   const prefix = lookup.publicKeyHex.slice(0, 12);
-  const wait = ctx.admin.awaitLogin<LoginSuccess>(prefix, ADMIN_REPLY_TIMEOUT_MS);
+  // `rejectMine` fails only this login's awaiter: a rejection keyed by prefix
+  // alone would hit a newer login to the same repeater.
+  const { promise: wait, reject: rejectMine } = ctx.admin.awaitLoginHandle<LoginSuccess>(prefix, ADMIN_REPLY_TIMEOUT_MS);
+  // A RESP_ERR can reject `wait` while the write below is still pending, before
+  // anything awaits it; mark it handled so that isn't an unhandled rejection.
+  // The `await wait` further down still sees the rejection.
+  wait.catch(() => {});
   const frame = buildSendLogin(lookup.publicKeyHex, password);
+  // CMD_SEND_LOGIN answers with RESP_SENT, or RESP_ERR when the radio can't
+  // send it (NOT_FOUND / TABLE_FULL). Hold a slot so that reply isn't credited
+  // to another send, and so a RESP_ERR fails the login now instead of after the
+  // 20s reply timeout.
+  const slot = parkAdminSent(ctx, 'login', {
+    onSent: () => claimMeshRequestSlot(ctx, (err) => rejectMine(err)),
+    fail: (err) => {
+      if (err instanceof ProtocolError) rejectMine(err);
+    },
+  });
   try {
     await ctx.writeFrame(frame);
   } catch (err) {
-    ctx.admin.rejectLogin(prefix, err as Error);
+    unparkAdminSent(ctx, slot);
+    rejectMine(err as Error);
     throw err;
   }
   const result = await wait;
@@ -416,7 +663,8 @@ export async function repeaterLogin(
 export async function repeaterLogout(ctx: FeatureContext, contactKey: string): Promise<void> {
   const contact = lookupRepeaterContact(ctx, contactKey);
   if (!contact.ok) throw new Error(contact.error);
-  await ctx.writeFrame(buildLogout(contact.publicKeyHex));
+  // CMD_LOGOUT answers RESP_OK; the sink consumes it.
+  await ctx.writeAckSink(buildLogout(contact.publicKeyHex));
   ctx.admin.clearSession(contactKey);
 }
 
@@ -665,10 +913,32 @@ export async function repeaterTracePath(
   const path = Buffer.from(opts.pathHex, 'hex');
   const tagHex = Buffer.alloc(4);
   tagHex.writeUInt32LE(opts.tag >>> 0, 0);
-  const wait = ctx.admin.awaitTag<TraceData>(tagHex.toString('hex'), ADMIN_REPLY_TIMEOUT_MS);
-  await ctx.writeFrame(buildSendTracePath({ tag: opts.tag, authCode: opts.authCode, flags: opts.flags, path }));
+  const tag = tagHex.toString('hex');
+  const wait = ctx.admin.awaitTag<TraceData>(tag, ADMIN_REPLY_TIMEOUT_MS);
+  // As in repeaterLogin: a RESP_ERR may reject `wait` mid-write.
+  wait.catch(() => {});
+  // CMD_SEND_TRACE_PATH answers with RESP_SENT (or RESP_ERR ILLEGAL_ARG /
+  // TABLE_FULL). Hold a slot so that reply isn't credited to another send.
+  const slot = parkAdminSent(ctx, 'trace', {
+    onSent: () => {},
+    fail: (err) => {
+      if (err instanceof ProtocolError) ctx.admin.rejectTag(tag, err);
+    },
+  });
+  try {
+    await ctx.writeFrame(buildSendTracePath({ tag: opts.tag, authCode: opts.authCode, flags: opts.flags, path }));
+  } catch (err) {
+    unparkAdminSent(ctx, slot);
+    ctx.admin.rejectTag(tag, err as Error);
+  }
   return wait;
 }
+
+const STATS_KINDS: Record<keyof typeof STATS_TYPE, LocalStats['kind']> = {
+  CORE: 'core',
+  RADIO: 'radio',
+  PACKETS: 'packets',
+};
 
 /** CMD_GET_STATS — local stats for the directly-connected device. Reply
  *  arrives as RESP_CODE_STATS. */
@@ -684,9 +954,18 @@ export async function repeaterGetLocalStats(ctx: FeatureContext, subtype: keyof 
       corr.pendingLocalStats = null;
       reject(new Error('GET_STATS timed out'));
     }, ADMIN_REPLY_TIMEOUT_MS);
-    corr.pendingLocalStats = { resolve, reject, timer };
+    corr.pendingLocalStats = { kind: STATS_KINDS[subtype], resolve, reject, timer };
   });
-  await ctx.writeFrame(buildGetStats(STATS_TYPE[subtype]));
+  // Assigned inside the executor above; TS can't see that.
+  const mine = corr.pendingLocalStats as AdminCorrRuntime['pendingLocalStats'];
+  // Firmware without CMD_GET_STATS answers RESP_ERR UNSUPPORTED_CMD; the
+  // reply slot takes it so it fails this call, not another command.
+  await ctx.writeExpectingReply(buildGetStats(STATS_TYPE[subtype]), RESP.STATS, (ack) => {
+    if (!mine || corr.pendingLocalStats !== mine) return;
+    clearTimeout(mine.timer);
+    corr.pendingLocalStats = null;
+    mine.reject(new ProtocolError(ack.errorCode, `GET_STATS rejected by radio: ${describeErrCode(ack.errorCode)}`));
+  });
   return wait;
 }
 
@@ -716,6 +995,14 @@ function handleStatusResponse(frame: Buffer, ctx: FeatureContext): void {
 function handleTelemetryResponse(frame: Buffer, ctx: FeatureContext): void {
   const parsed = parseTelemetryResponse(frame);
   if (!parsed) return;
+  // The radio's own telemetry carries its own prefix. requestSelfTelemetry's
+  // waiter takes it before this handler runs; one that reaches here answered a
+  // request that already timed out. It is not a repeater's telemetry.
+  const ownerPrefix = ctx.state.getOwner()?.publicKeyHex.slice(0, 12).toLowerCase();
+  if (ownerPrefix !== undefined && parsed.senderPubKeyPrefixHex.toLowerCase() === ownerPrefix) {
+    ctx.log.debug(`self telemetry reply with no waiter (${parsed.payloadHex.length / 2}B) dropped`);
+    return;
+  }
   const contact = ctx.state
     .getContacts()
     .find((c) => c.publicKeyHex.toLowerCase().startsWith(parsed.senderPubKeyPrefixHex.toLowerCase()));
@@ -785,7 +1072,9 @@ export const repeaterAdminFeature: Feature = {
     }
     // RESP.STATS — reply to a CMD_GET_STATS write.
     const parsed = parseLocalStats(frame);
-    if (parsed && ctx.rt.adminCorr.pendingLocalStats) {
+    // The reply echoes its subtype; a superseded request's reply (a different
+    // kind) must not resolve the newer one.
+    if (parsed && ctx.rt.adminCorr.pendingLocalStats?.kind === parsed.kind) {
       clearTimeout(ctx.rt.adminCorr.pendingLocalStats.timer);
       ctx.rt.adminCorr.pendingLocalStats.resolve(parsed);
       ctx.rt.adminCorr.pendingLocalStats = null;

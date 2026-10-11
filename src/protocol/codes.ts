@@ -100,8 +100,9 @@ export const CMD = {
   //   overwrites the radio's auto-add pref. Bit 0 clear = auto-add everything
   //   (and `autoadd_config` is ignored); bit 0 set = honour the per-kind flags.
   SET_OTHER_PARAMS: 0x26,
-  // CMD_GET_CUSTOM_VAR: [0x28][key utf8]. Replies RESP_CUSTOM_VARS with the
-  //   key:value text the firmware tracks (gps, gps_interval, etc.).
+  // CMD_GET_CUSTOM_VARS: [0x28]. Replies RESP_CUSTOM_VARS with every setting
+  //   the firmware's sensor manager exposes (e.g. gps); anything after the
+  //   opcode is ignored.
   GET_CUSTOM_VAR: 0x28,
   // CMD_SET_CUSTOM_VAR: [0x29]"key:value" UTF-8. Replies RESP_OK/ERR.
   SET_CUSTOM_VAR: 0x29,
@@ -255,7 +256,8 @@ export const RESP = {
   CONTACT_MSG_RECV_V3: 0x10,
   CHANNEL_MSG_RECV_V3: 0x11,
   CHANNEL_INFO: 0x12,
-  // RESP_CUSTOM_VARS [0x15] newline-separated "key:value" UTF-8 pairs.
+  // RESP_CUSTOM_VARS [0x15] comma-separated "key:value" UTF-8 pairs; empty
+  //   when the radio exposes no settings.
   CUSTOM_VARS: 0x15,
   // RESP_CODE_STATS reply to CMD_GET_STATS — second byte echoes the requested
   // STATS_TYPE so the caller can route the rest of the payload.

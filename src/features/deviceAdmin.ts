@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { FeatureDisabledError, ProtocolTimeoutError } from '../model/errors';
 import { CMD, RESP } from '../protocol/codes';
 import type { Feature, FeatureContext } from './feature';
+import { nextReplySeq } from './replyOrder';
 
 // Device administration (firmware: companion_radio/MyMesh.cpp). Groups the
 // build-gated private-key export/import, the BLE-PIN setter, and factory reset.
@@ -65,6 +66,9 @@ export function decodeExportedPrivateKey(frame: Buffer): string | null {
 // ---- Dual-reply correlation (export) -----------------------------------
 
 export interface PendingExport {
+  /** Write-order stamp (replyOrder.ts): orders this export's RESP_DISABLED
+   *  against an import's. */
+  seq: number;
   resolve: (privKeyHex: string) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
@@ -103,9 +107,9 @@ export function resetDeviceAdmin(ctx: FeatureContext, reason: string): void {
 export const deviceAdminFeature: Feature = {
   handles: [RESP.PRIVATE_KEY, RESP.DISABLED],
   handle: (code, frame, ctx) => {
-    // RESP_DISABLED can also arrive for a build-gated *import* (which does NOT
-    // queue here — it rides the bare ack channel). With no export queued, the
-    // shift is a harmless no-op and the import's ack times out on its own.
+    // RESP_DISABLED can also answer a build-gated *import*. The session gives
+    // it to the import's own ack slot when the import was written before any
+    // pending export (see exportHeadSeq), so it never reaches here.
     const entry = ctx.rt.deviceAdmin.pendingExports.shift();
     if (!entry) return;
     clearTimeout(entry.timer);
@@ -119,6 +123,11 @@ export const deviceAdminFeature: Feature = {
   },
 };
 
+/** Write-order stamp of the oldest export still waiting for its reply. */
+export function exportHeadSeq(ctx: FeatureContext): number | undefined {
+  return ctx.rt.deviceAdmin.pendingExports[0]?.seq;
+}
+
 // ---- Session-facing functions ------------------------------------------
 
 /** Export the device's 64-byte private key (hex). Rejects FeatureDisabledError
@@ -126,6 +135,7 @@ export const deviceAdminFeature: Feature = {
 export async function exportPrivateKey(ctx: FeatureContext): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const entry: PendingExport = {
+      seq: nextReplySeq(ctx),
       resolve,
       reject,
       timer: setTimeout(() => {
@@ -143,11 +153,12 @@ export async function exportPrivateKey(ctx: FeatureContext): Promise<string> {
 }
 
 /** Import a 64-byte private key (hex). Resolves on RESP_OK; rejects
- *  ProtocolError on RESP_ERR (invalid key / FS error). On a build without
- *  ENABLE_PRIVATE_KEY_IMPORT the radio answers RESP_DISABLED, which the feature
- *  consumes as a no-op (no export queued) and the ack times out → ProtocolError. */
+ *  ProtocolError on RESP_ERR (invalid key / FS error), and FeatureDisabledError
+ *  on a build without ENABLE_PRIVATE_KEY_IMPORT, which answers RESP_DISABLED.
+ *  That RESP_DISABLED settles the import's own ack slot, so a later RESP_OK
+ *  can't be mistaken for the import's answer. */
 export async function importPrivateKey(ctx: FeatureContext, privKeyHex: string): Promise<void> {
-  await ctx.request(encodeImportPrivateKey(privKeyHex));
+  await ctx.request(encodeImportPrivateKey(privKeyHex), { orDisabled: true });
 }
 
 /** Set the BLE pairing PIN (0 disables it; otherwise a 6-digit number). */

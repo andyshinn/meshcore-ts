@@ -11,3 +11,7 @@ export const ADMIN_SENT_TIMEOUT_MS = 5_000;
 
 /** Default wait for a mesh-routed admin reply — binary/anon requests, login. */
 export const ADMIN_REPLY_TIMEOUT_MS = 20_000;
+
+/** Default wait for the radio's own telemetry (`requestSelfTelemetry`). The
+ *  radio answers at once, without touching the air. */
+export const SELF_TELEMETRY_TIMEOUT_MS = 5_000;

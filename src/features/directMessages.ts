@@ -4,6 +4,7 @@ import { CMD, PUSH, RESP, TXT_TYPE } from '../protocol/codes';
 import { encodeResetPath, upsertContact } from './contacts';
 import * as drain from './drain';
 import type { Feature, FeatureContext } from './feature';
+import { nextReplySeq } from './replyOrder';
 
 // After RESP_SENT lands we hold the expected_ack hash → message id mapping
 // until a PUSH_SEND_CONFIRMED arrives (or until ACK_RETENTION_MS).
@@ -17,13 +18,26 @@ const PER_ATTEMPT_TIMEOUT_MS = 30_000;
 // ---- Per-session feature state -----------------------------------------
 
 /** Repeater-admin hooks. The repeater-admin feature shares the RESP_SENT /
- *  CONTACT_MSG_RECV opcodes with DMs: admin sends are ack'd ahead of DMs, and
- *  txt_type=CLI_DATA replies route to a pending CLI awaiter. Those queues live
- *  in the repeater-admin feature; it registers these hooks (via setAdminHooks)
- *  so admin keeps first crack. A hook returns true when it consumed the frame. */
+ *  CONTACT_MSG_RECV opcodes with DMs: admin sends and DM sends both answer with
+ *  RESP_SENT, and txt_type=CLI_DATA replies route to a pending CLI awaiter.
+ *  Those queues live in the repeater-admin feature; it registers these hooks
+ *  (via setAdminHooks). */
 export interface DmAdminHooks {
-  onSentTag?: (expectedAckHex: string) => boolean;
+  /** Write-order stamp of the oldest admin send still waiting for RESP_SENT,
+   *  or undefined when none is. A RESP_SENT goes to whichever of the admin and
+   *  DM FIFOs has the older head (see replyOrder.ts). */
+  sentHeadSeq?: () => number | undefined;
+  /** Hand a RESP_SENT to the oldest admin send. Called only when
+   *  `sentHeadSeq` reported an admin head older than the DM head. */
+  onSent?: (sent: SentAck) => void;
   onCliReply?: (senderPrefixHex: string, body: string) => boolean;
+}
+
+/** One outbound DM (or CLI send) waiting for its RESP_SENT. `seq` is its
+ *  write-order stamp (replyOrder.ts). */
+export interface DmSendSlot {
+  id: string;
+  seq: number;
 }
 
 /** A CLI send's identity on the DM send FIFO. */
@@ -43,8 +57,8 @@ export interface CliSendMeta {
  *  pendingDmAcks / adminHooks). */
 export interface DmRuntime {
   // DM send → RESP_SENT has no correlation id, so we FIFO outgoing DMs and pop
-  // on each RESP_SENT.
-  dmSendQueue: string[];
+  // on each RESP_SENT the DM queue owns.
+  dmSendQueue: DmSendSlot[];
   // expected_ack hex → message id, populated on RESP_SENT and cleared on
   // PUSH_SEND_CONFIRMED or after ACK_RETENTION_MS.
   pendingDmAcks: Map<string, { messageId: string; timer: ReturnType<typeof setTimeout> }>;
@@ -225,13 +239,24 @@ export function setAdminHooks(ctx: FeatureContext, hooks: DmAdminHooks): void {
  *  `cliSendState` instead of `messageState`. */
 export function enqueueCliSend(ctx: FeatureContext, id: string, meta: CliSendMeta): void {
   ctx.rt.dm.cliSends.set(id, meta);
-  ctx.rt.dm.dmSendQueue.push(id);
+  enqueueDmSend(ctx, id);
+}
+
+/** Push a send onto the DM send FIFO, stamped with its write order. Call it in
+ *  the same synchronous turn as the writeFrame() it stands for. */
+export function enqueueDmSend(ctx: FeatureContext, id: string): void {
+  ctx.rt.dm.dmSendQueue.push({ id, seq: nextReplySeq(ctx) });
+}
+
+/** Write-order stamp of the oldest DM send still waiting for RESP_SENT. */
+export function dmSendHeadSeq(ctx: FeatureContext): number | undefined {
+  return ctx.rt.dm.dmSendQueue[0]?.seq;
 }
 
 /** Remove an id from the DM send FIFO (on write failure), dropping its CLI tag
  *  if it had one. */
 export function dequeueDmSend(ctx: FeatureContext, id: string): void {
-  const i = ctx.rt.dm.dmSendQueue.indexOf(id);
+  const i = ctx.rt.dm.dmSendQueue.findIndex((slot) => slot.id === id);
   if (i !== -1) ctx.rt.dm.dmSendQueue.splice(i, 1);
   ctx.rt.dm.cliSends.delete(id);
 }
@@ -257,7 +282,7 @@ export async function sendDmText(
     text,
     attempt: opts.attempt,
   });
-  ctx.rt.dm.dmSendQueue.push(messageId);
+  enqueueDmSend(ctx, messageId);
   try {
     await ctx.writeFrame(frame);
     return { ok: true };
@@ -306,12 +331,14 @@ export async function sendDmTextWithRetry(
   // Phase 2: drop the path on the radio, then flood.
   if (hadPath && floodAttempts > 0) {
     try {
-      await ctx.writeFrame(encodeResetPath(initial.publicKeyHex));
-      upsertContact(ctx, {
-        ...initial,
-        outPathHex: undefined,
-        hops: undefined,
-        pathManual: false,
+      // CMD_RESET_PATH answers RESP_OK; the sink consumes it. Local state
+      // follows only once the radio confirms, and the discovered row too, so a
+      // later full-record rewrite doesn't put the dead path back.
+      await ctx.writeAckSink(encodeResetPath(initial.publicKeyHex), (ack) => {
+        if (!ack.ok) return;
+        ctx.state.discovered.setOutPath(initial.publicKeyHex, 0xff, '');
+        const current = ctx.state.getContact(contactKey) ?? initial;
+        upsertContact(ctx, { ...current, outPathHex: undefined, hops: undefined, pathManual: false });
       });
     } catch (err) {
       ctx.log.warn(`resetContactPath during retry failed: ${(err as Error).message}`);
@@ -398,9 +425,9 @@ function emitSendState(ctx: FeatureContext, id: string, state: CliSendPhase, rea
   ctx.events.emit('messageState', id, state);
 }
 
-/** Fail the oldest in-flight send (bare RESP_ERR, or disconnect). */
+/** Fail the oldest in-flight send (a RESP_ERR the DM queue owns, or disconnect). */
 export function failOldestDmSend(ctx: FeatureContext, reason: string): void {
-  const messageId = ctx.rt.dm.dmSendQueue.shift();
+  const messageId = ctx.rt.dm.dmSendQueue.shift()?.id;
   if (!messageId) return;
   emitSendState(ctx, messageId, 'failed', reason);
   ctx.log.warn(`send failed id=${messageId}: ${reason}`);
@@ -480,11 +507,18 @@ function handleContactMsg(code: number, frame: Buffer, ctx: FeatureContext): voi
 function handleSent(frame: Buffer, ctx: FeatureContext): void {
   const sent = decodeSentAck(frame);
   if (!sent) return;
-  // Admin writes are serialised and ack'd ahead of DM sends. The expected_ack
-  // u32 from RESP_SENT is the same `tag` the firmware later echoes back in
-  // PUSH_BINARY_RESPONSE / PUSH_LOGIN_SUCCESS.
-  if (ctx.rt.dm.adminHooks.onSentTag?.(sent.expectedAckHex)) return;
-  const messageId = ctx.rt.dm.dmSendQueue.shift();
+  // Admin sends and DM sends both answer with RESP_SENT. The firmware replies
+  // in command order, so the older queue head owns this one. For an admin send
+  // the expected_ack u32 is the `tag` the firmware later echoes back in
+  // PUSH_BINARY_RESPONSE.
+  const hooks = ctx.rt.dm.adminHooks;
+  const adminSeq = hooks.sentHeadSeq?.();
+  const dmSeq = dmSendHeadSeq(ctx);
+  if (adminSeq !== undefined && (dmSeq === undefined || adminSeq < dmSeq)) {
+    hooks.onSent?.(sent);
+    return;
+  }
+  const messageId = ctx.rt.dm.dmSendQueue.shift()?.id;
   if (!messageId) {
     // RESP_SENT for a non-DM (e.g. channel send echo) — no state machine.
     return;

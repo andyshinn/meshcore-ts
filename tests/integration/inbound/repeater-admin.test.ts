@@ -109,7 +109,11 @@ describe('repeater administration', () => {
     await flush();
     // Owner info goes out as a PUBLIC anon request (CMD_SEND_ANON_REQ = 0x39),
     // not the login-gated binary req. The flood contact first gets a transient
-    // zero-hop path (CMD_ADD_UPDATE_CONTACT = 0x09) so the request is direct.
+    // zero-hop path (CMD_ADD_UPDATE_CONTACT = 0x09) so the request is direct;
+    // the anon request waits for the radio to confirm it.
+    expect(transport.sent.at(-1)?.[0]).toBe(0x09);
+    deliver(transport, Buffer.from([0x00])); // RESP_OK
+    await flush();
     expect(transport.sent.some((f) => f[0] === 0x39)).toBe(true);
 
     // RESP_SENT hands back the tag — consumed by the admin queue (onSentTag),

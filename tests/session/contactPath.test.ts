@@ -25,7 +25,10 @@ describe('setContactPath packs the firmware path_len byte', () => {
     const contact: Models.Contact = { key: `c:${PK}`, publicKeyHex: PK, name: 'Bob', kind: 'chat' };
     session.state.upsertContact(contact);
 
-    await session.setContactPath(`c:${PK}`, 'aabbccdd'); // 4 bytes = 2 hops × 2-byte hash
+    const p = session.setContactPath(`c:${PK}`, 'aabbccdd'); // 4 bytes = 2 hops × 2-byte hash
+    await Promise.resolve();
+    deliver(transport, Buffer.from([0x00])); // RESP_OK
+    await p;
 
     const frame = Buffer.from(transport.sent.at(-1) ?? Buffer.alloc(0));
     expect(frame[0]).toBe(CMD_ADD_UPDATE_CONTACT);
@@ -90,7 +93,10 @@ describe('setContactFavourite re-encodes a stored path with the packed byte', ()
       { onRadio: true, nowMs: 1_700_000_000_000, heardLive: true },
     );
 
-    await session.setContactFavourite(PK, true);
+    const p = session.setContactFavourite(PK, true);
+    await Promise.resolve();
+    deliver(transport, Buffer.from([0x00])); // RESP_OK
+    await p;
 
     const frame = Buffer.from(transport.sent.at(-1) ?? Buffer.alloc(0));
     expect(frame[0]).toBe(CMD_ADD_UPDATE_CONTACT);

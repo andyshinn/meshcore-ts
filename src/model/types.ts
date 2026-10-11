@@ -78,6 +78,11 @@ export interface Contact {
   /** Radio-level favourite — maps to the firmware contact flag bit 0, which
    *  protects the contact from overwrite-oldest eviction. */
   favourite?: boolean;
+  /** Which telemetry this contact may read from us when the radio's
+   *  {@link TelemetryPolicy} mode for that group is 1 (allow per contact).
+   *  Firmware contact flags bits 1-3. Present on every contact the radio
+   *  reported; undefined on placeholders synthesized from a message prefix. */
+  telemetryPerms?: TelemetryPerms;
   /** Hex-encoded out-path bytes (no separators) mirroring the firmware's
    *  advert.out_path. Empty / undefined means "flood" (no source-route). The
    *  byte length must be a multiple of `outPathHashSize`. */
@@ -287,6 +292,16 @@ export const DEFAULT_AUTO_ADD_CONFIG: AutoAddConfig = {
   radioMaxHops: 0,
   manualAddContacts: 0,
 };
+
+/** Per-contact telemetry permissions, stored in the firmware contact flags
+ *  byte (`flags >> 1`): bit 1 base (battery), bit 2 location, bit 3
+ *  environment sensors. Bit 0 is the favourite flag. The radio consults these
+ *  only for a group whose {@link TelemetryPolicy} mode is 1. */
+export interface TelemetryPerms {
+  base: boolean;
+  loc: boolean;
+  env: boolean;
+}
 
 /** Telemetry/messaging knobs from CMD_SET_OTHER_PARAMS. Each telemetry mode is
  *  0=deny, 1=allow-per-contact-flag, 2=allow-all. `multiAcks` is 0..2 typical;

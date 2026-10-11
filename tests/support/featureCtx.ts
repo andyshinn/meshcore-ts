@@ -1,4 +1,4 @@
-import type { Buffer } from 'node:buffer';
+import { Buffer } from 'node:buffer';
 import { AdminSessionStore } from '../../src/features/adminSessions';
 import { createChannelsRuntime } from '../../src/features/channels';
 import { createContactsIterRuntime } from '../../src/features/contacts';
@@ -9,6 +9,7 @@ import type { FeatureContext } from '../../src/features/feature';
 import { createPathDiagRuntime } from '../../src/features/pathDiagnostics';
 import { PendingChannelSends } from '../../src/features/pendingChannelSends';
 import { createAdminCorrRuntime } from '../../src/features/repeaterAdmin';
+import { createReplyOrderRuntime } from '../../src/features/replyOrder';
 import { MeshObservations } from '../../src/model/meshObservations';
 import { SessionState } from '../../src/model/state/model';
 import type { Contact } from '../../src/model/types';
@@ -42,10 +43,25 @@ export function makeFeatureCtx(opts: { admin?: AdminSessionStore } = {}): Featur
     writeFrame: async (frame: Buffer) => {
       writes.push(frame);
     },
-    request: async () => {
-      throw new Error('request not used in these tests');
+    // As if the radio answered RESP_OK.
+    writeAckSink: async (frame: Buffer, onAck?: (ack: { ok: boolean }) => void) => {
+      writes.push(frame);
+      onAck?.({ ok: true });
+    },
+    writeExpectingReply: async (frame: Buffer) => {
+      writes.push(frame);
+    },
+    // A bare-ack request (no `expect`) writes and resolves as if the radio
+    // answered RESP_OK; typed requests aren't modelled here.
+    request: async (frame: Buffer, opts?: { expect?: number }) => {
+      if (opts?.expect !== undefined) throw new Error('typed request not modelled in these tests');
+      writes.push(frame);
+      return Buffer.alloc(0);
     },
     requestOrNull: async () => null,
+    requestOrError: async () => {
+      throw new Error('requestOrError not used in these tests');
+    },
     events,
     state,
     log: noopLogger,
@@ -60,6 +76,7 @@ export function makeFeatureCtx(opts: { admin?: AdminSessionStore } = {}): Featur
       pathDisc: createPathDiagRuntime(),
       dm: createDmRuntime(),
       adminCorr: createAdminCorrRuntime(),
+      replyOrder: createReplyOrderRuntime(),
     },
     getTransportState: () => 'connected',
     contactsSync: () => {},
