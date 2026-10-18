@@ -50,16 +50,22 @@ export function decodeCustomVars(frame: Buffer): Record<string, string> {
  *  any gps / gps_interval value into GpsConfig and emit `gpsConfig`. Shared by
  *  the feature handler and requestCustomVars(), which consumes the frame via
  *  the typed-reply path and so must invoke this itself. */
-export function applyCustomVars(ctx: FeatureContext, frame: Buffer): Record<string, string> {
+export function applyCustomVars(
+  ctx: FeatureContext,
+  frame: Buffer,
+  opts: { gpsOnlyOnChange?: boolean } = {},
+): Record<string, string> {
   const kv = decodeCustomVars(frame);
   ctx.events.emit('customVars', { ...kv });
-  foldGpsVars(ctx, kv);
+  foldGpsVars(ctx, kv, opts.gpsOnlyOnChange);
   return kv;
 }
 
 /** Fold gps / gps_interval values (as reported, or as just written) into
- *  GpsConfig and emit `gpsConfig`. No-op when neither key is present. */
-export function foldGpsVars(ctx: FeatureContext, kv: Record<string, string>): void {
+ *  GpsConfig and emit `gpsConfig`. No-op when neither key is present. With
+ *  `onlyOnChange`, `gpsConfig` is emitted only when the value differs from the
+ *  stored one (used by the settings poll so an idle poll is silent). */
+export function foldGpsVars(ctx: FeatureContext, kv: Record<string, string>, onlyOnChange = false): void {
   if (kv.gps === undefined && kv.gps_interval === undefined) return;
   const current = ctx.state.getGpsConfig();
   // The firmware reads gps_interval with atoi and uses 1s for 0.
@@ -68,6 +74,7 @@ export function foldGpsVars(ctx: FeatureContext, kv: Record<string, string>): vo
     enabled: kv.gps !== undefined ? kv.gps !== '0' : current.enabled,
     intervalSec: Number.isNaN(interval) ? current.intervalSec : Math.max(1, interval),
   };
+  if (onlyOnChange && next.enabled === current.enabled && next.intervalSec === current.intervalSec) return;
   ctx.state.setGpsConfig(next);
   ctx.events.emit('gpsConfig', next);
 }

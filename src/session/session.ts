@@ -121,6 +121,8 @@ const SET_CHANNEL_TIMEOUT_MS = 2000;
 // rather than waiting on user-initiated traffic. Mirrors meshcore-open's
 // battery/radio-stats polling pattern (protocol traffic doubles as liveness).
 const LIVENESS_POLL_MS = 60_000;
+// Floor for watchRadioSettings(): shorter requested intervals are raised to it.
+const MIN_SETTINGS_POLL_MS = 10_000;
 
 // Default wait for a typed RESP_* reply to a feature ctx.request({ expect }).
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -223,6 +225,11 @@ export class MeshCoreSession {
   /** FIFO of awaiters per expected RESP_* code, for ctx.request({ expect }). */
   private readonly pendingTyped = new Map<number, PendingTyped[]>();
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  /** Intervals requested by active watchRadioSettings() subscribers. */
+  private readonly settingsWatchers = new Set<{ intervalMs: number }>();
+  private settingsTimer: ReturnType<typeof setInterval> | null = null;
+  /** Device-sync operations (handshake, locked getters) currently in flight. */
+  private syncOps = 0;
 
   /** The capability surface handed to feature modules. */
   private readonly ctx: FeatureContext;
@@ -729,6 +736,7 @@ export class MeshCoreSession {
       channels.clearPresence(this.ctx);
       void this.handshake();
       this.startLivenessPoll();
+      this.syncSettingsPoll();
     } else if (!this.connected && wasConnected) {
       this.tearDownConnection('transport disconnected');
     }
@@ -759,6 +767,7 @@ export class MeshCoreSession {
   private tearDownConnection(reason: string): void {
     this.log.info(reason);
     this.stopLivenessPoll();
+    this.stopSettingsPoll();
     // Abandon any in-flight drain round; a reconnect's handshake starts fresh.
     resetDrain(this.ctx);
     // Likewise for the two RX-side correlation buffers. Anything we sent
@@ -911,6 +920,54 @@ export class MeshCoreSession {
     }, LIVENESS_POLL_MS);
   }
 
+  /** (Re)arm the shared settings poll from the current subscribers: no timer
+   *  without subscribers or a connection, otherwise the shortest interval. */
+  private syncSettingsPoll(): void {
+    this.stopSettingsPoll();
+    if (!this.connected || this.settingsWatchers.size === 0) return;
+    const ms = Math.min(...Array.from(this.settingsWatchers, (w) => w.intervalMs));
+    this.settingsTimer = setInterval(() => void this.pollRadioSettings(), ms);
+  }
+
+  private stopSettingsPoll(): void {
+    if (this.settingsTimer) {
+      clearInterval(this.settingsTimer);
+      this.settingsTimer = null;
+    }
+  }
+
+  private async pollRadioSettings(): Promise<void> {
+    // Stay out of the way of the handshake and other device-sync operations.
+    if (!this.isCommandable() || this.syncOps > 0) return;
+    try {
+      const frame = await this.requestOrError(encodeGetCustomVar(), RESP.CUSTOM_VARS);
+      applyCustomVars(this.ctx, frame, { gpsOnlyOnChange: true });
+    } catch (err) {
+      this.log.debug(`settings poll failed: ${(err as Error).message}`);
+    }
+  }
+
+  /** Periodically re-read radio settings that can change on the device itself
+   *  (e.g. the GPS button on the radio's screen); the firmware never pushes
+   *  these. Off unless subscribed, so a client that never calls this sees no
+   *  extra traffic. Each tick sends CMD_GET_CUSTOM_VARS; `customVars` is
+   *  emitted on every reply, `gpsConfig` only when the value changed. Ticks are
+   *  skipped while the handshake or another device-sync is in flight. One timer
+   *  is shared by all subscribers (shortest interval wins); it stops on
+   *  disconnect and resumes on reconnect while subscribers remain.
+   *
+   *  @param opts.intervalMs Poll period, default 60 s, floor 10 s.
+   *  @returns A stop function; calling it more than once is a no-op. */
+  watchRadioSettings(opts: { intervalMs?: number } = {}): () => void {
+    const watcher = { intervalMs: Math.max(MIN_SETTINGS_POLL_MS, opts.intervalMs ?? LIVENESS_POLL_MS) };
+    this.settingsWatchers.add(watcher);
+    this.syncSettingsPoll();
+    return () => {
+      if (!this.settingsWatchers.delete(watcher)) return;
+      this.syncSettingsPoll();
+    };
+  }
+
   private stopLivenessPoll(): void {
     if (this.livenessTimer) {
       clearInterval(this.livenessTimer);
@@ -938,11 +995,15 @@ export class MeshCoreSession {
    *  shared waiter slots. Errors propagate to the caller but never poison the
    *  lock for the next operation. */
   private withSyncLock<T>(fn: () => Promise<T>): Promise<T> {
+    this.syncOps++;
     const run = this.syncLock.then(fn, fn);
     this.syncLock = run.then(
       () => undefined,
       () => undefined,
     );
+    void this.syncLock.then(() => {
+      this.syncOps--;
+    });
     return run;
   }
 
@@ -962,9 +1023,11 @@ export class MeshCoreSession {
       () => lockHeld,
       () => lockHeld,
     );
+    this.syncOps++;
     try {
       await this.handshakeInner();
     } finally {
+      this.syncOps--;
       releaseLock();
     }
   }
