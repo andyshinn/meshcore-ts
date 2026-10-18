@@ -188,3 +188,25 @@ repeater administration (`repeaterLogin`, `repeaterSendCli`, `repeaterTracePath`
 own telemetry (`requestSelfTelemetry`).
 
 See the [API reference](../../api/readme/) for the complete, typed surface.
+
+
+## Settings changed on the radio itself
+
+The firmware never pushes setting changes: pressing the GPS button on a
+companion's screen changes the radio but sends the app nothing. Re-reading on
+connect covers changes made while disconnected; for changes made while
+connected, opt in to polling:
+
+```ts
+const stop = session.watchRadioSettings({ intervalMs: 30_000 });
+// ... later, e.g. when the settings screen closes
+stop();
+```
+
+It is off unless you subscribe, so a client that never calls it sees no extra
+frames. Each tick sends `CMD_GET_CUSTOM_VARS`; `customVars` is emitted on every
+reply, but `gpsConfig` only when the value actually changed. All subscribers
+share one timer using the shortest requested interval (default 60 s, minimum
+10 s). Ticks are skipped while the handshake or another device sync is running,
+the timer stops on disconnect and resumes on reconnect while subscribers
+remain. `stop()` may be called more than once.
